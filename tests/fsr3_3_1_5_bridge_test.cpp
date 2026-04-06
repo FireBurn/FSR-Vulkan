@@ -1,0 +1,765 @@
+/*
+ * Copyright (c) 2026 Q2RTX FSR Vulkan contributors
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "ffx_vk_fsr3_3_1_5_bridge.h"
+
+#include "ffx_interface.h"
+#include "ffx_fsr3upscaler.h"
+
+#include <cwchar>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreatePipeline(
+    FfxInterface*, FfxShaderBlob*, const FfxPipelineDescription*, FfxUInt32,
+    FfxPipelineState*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeDestroyPipeline(
+    FfxInterface*, FfxPipelineState*, FfxUInt32);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateResource(
+    FfxInterface*, const FfxCreateResourceDescription*, FfxUInt32, FfxResourceInternal*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeDestroyResource(
+    FfxInterface*, FfxResourceInternal, FfxUInt32);
+extern "C" FfxApiResource ffxVkFsr3_3_1_5BridgeGetResource(
+    FfxInterface*, FfxResourceInternal);
+extern "C" FfxApiResourceDescription ffxVkFsr3_3_1_5BridgeGetResourceDescription(
+    FfxInterface*, FfxResourceInternal);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeRegisterResource(
+    FfxInterface*, const FfxApiResource*, FfxUInt32, FfxResourceInternal*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeUnregisterResources(
+    FfxInterface*, FfxCommandList, FfxUInt32);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeScheduleGpuJob(
+    FfxInterface*, const FfxGpuJobDescription*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
+    FfxInterface*, FfxCommandList, FfxUInt32);
+extern "C" FfxVersionNumber ffxVkFsr3_3_1_5BridgeGetSDKVersion(FfxInterface*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateBackendContext(
+    FfxInterface*, FfxEffect, FfxEffectBindlessConfig*, FfxUInt32*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeDestroyBackendContext(FfxInterface*, FfxUInt32);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeGetDeviceCapabilities(
+    FfxInterface*, FfxDeviceCapabilities*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeStageConstantBufferData(
+    FfxInterface*, void*, FfxUInt32, FfxConstantBuffer*);
+
+extern "C" FfxErrorCode fsr3UpscalerGetPermutationBlobByIndex(
+    FfxFsr3UpscalerPass, uint32_t, FfxShaderBlob* outBlob)
+{
+    if (!outBlob)
+        return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_POINTER);
+    std::memset(outBlob, 0, sizeof(*outBlob));
+    return FFX_OK;
+}
+
+extern "C" FfxErrorCode fsr3UpscalerIsWave64(uint32_t, bool& isWave64)
+{
+    isWave64 = false;
+    return FFX_OK;
+}
+
+FfxErrorCode GetResourceSizeFromDescription(FfxDevice,
+                                            const FfxCreateResourceDescription*,
+                                            uint64_t* sizeInBytes,
+                                            uint64_t* alignment)
+{
+    if (sizeInBytes)
+        *sizeInBytes = 0u;
+    if (alignment)
+        *alignment = 0u;
+    return FFX_OK;
+}
+
+namespace {
+
+bool choose_compute_device(VkInstance instance, VkPhysicalDevice* physical,
+                           uint32_t* queueFamily)
+{
+    uint32_t physicalCount = 0;
+    if (vkEnumeratePhysicalDevices(instance, &physicalCount, nullptr) != VK_SUCCESS ||
+        physicalCount == 0u || physicalCount > 16u)
+        return false;
+    VkPhysicalDevice devices[16]{};
+    if (vkEnumeratePhysicalDevices(instance, &physicalCount, devices) != VK_SUCCESS)
+        return false;
+    for (uint32_t index = 0; index < physicalCount; ++index) {
+        uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(devices[index], &count, nullptr);
+        if (count > 32u)
+            continue;
+        VkQueueFamilyProperties properties[32]{};
+        vkGetPhysicalDeviceQueueFamilyProperties(devices[index], &count, properties);
+        for (uint32_t queue = 0; queue < count; ++queue) {
+            if (properties[queue].queueCount && (properties[queue].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
+                *physical = devices[index];
+                *queueFamily = queue;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool has_extension(VkPhysicalDevice physical, const char* required)
+{
+    uint32_t count = 0;
+    if (vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr) != VK_SUCCESS || count > 256u)
+        return false;
+    VkExtensionProperties extensions[256]{};
+    if (vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, extensions) != VK_SUCCESS)
+        return false;
+    for (uint32_t index = 0; index < count; ++index) {
+        if (std::strcmp(extensions[index].extensionName, required) == 0)
+            return true;
+    }
+    return false;
+}
+
+struct ValidationState {
+    std::atomic_uint warnings{0u};
+    std::atomic_uint errors{0u};
+};
+
+VKAPI_ATTR VkBool32 VKAPI_CALL validation_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT,
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void* userData)
+{
+    ValidationState* state = static_cast<ValidationState*>(userData);
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+        ++state->warnings;
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+        ++state->errors;
+    if (severity & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT))
+        std::fprintf(stderr, "FSR3.1.5 bridge Vulkan validation: %s\n",
+                     data && data->pMessage ? data->pMessage : "(no message)");
+    return VK_FALSE;
+}
+
+bool has_validation_layer()
+{
+    uint32_t count = 0u;
+    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS)
+        return false;
+    std::vector<VkLayerProperties> properties(count);
+    if (vkEnumerateInstanceLayerProperties(&count, properties.data()) != VK_SUCCESS)
+        return false;
+    for (const VkLayerProperties& property : properties) {
+        if (std::strcmp(property.layerName, "VK_LAYER_KHRONOS_validation") == 0)
+            return true;
+    }
+    return false;
+}
+
+bool expect(bool condition, const char* message)
+{
+    if (!condition)
+        std::fprintf(stderr, "FSR3.1.5 bridge test failure: %s\n", message);
+    return condition;
+}
+
+uint32_t find_host_visible_memory(VkPhysicalDevice physical, uint32_t typeBits)
+{
+    VkPhysicalDeviceMemoryProperties properties{};
+    vkGetPhysicalDeviceMemoryProperties(physical, &properties);
+    for (uint32_t index = 0u; index < properties.memoryTypeCount; ++index) {
+        const VkMemoryPropertyFlags flags = properties.memoryTypes[index].propertyFlags;
+        if ((typeBits & (1u << index)) && (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+            return index;
+    }
+    return UINT32_MAX;
+}
+
+bool verify_rgba16f_output(VkPhysicalDevice physical, VkDevice device, VkQueue queue,
+                           VkCommandPool commandPool, VkImage output,
+                           uint32_t width, uint32_t height)
+{
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 4u * sizeof(uint16_t);
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    VkMemoryAllocateInfo allocationInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    VkMemoryRequirements requirements{};
+    VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    bool result = false;
+
+    bufferInfo.size = byteCount;
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (!expect(vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) == VK_SUCCESS,
+                "create SDK output readback buffer"))
+        goto cleanup;
+    vkGetBufferMemoryRequirements(device, buffer, &requirements);
+    allocationInfo.allocationSize = requirements.size;
+    allocationInfo.memoryTypeIndex = find_host_visible_memory(physical, requirements.memoryTypeBits);
+    if (!expect(allocationInfo.memoryTypeIndex != UINT32_MAX, "find SDK output readback memory") ||
+        !expect(vkAllocateMemory(device, &allocationInfo, nullptr, &memory) == VK_SUCCESS,
+                "allocate SDK output readback memory") ||
+        !expect(vkBindBufferMemory(device, buffer, memory, 0u) == VK_SUCCESS,
+                "bind SDK output readback memory"))
+        goto cleanup;
+    allocateInfo.commandPool = commandPool;
+    allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocateInfo.commandBufferCount = 1u;
+    if (!expect(vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) == VK_SUCCESS,
+                "allocate SDK output readback command buffer") ||
+        !expect(vkResetCommandPool(device, commandPool, 0u) == VK_SUCCESS,
+                "reset SDK output readback command pool") ||
+        !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                "begin SDK output readback command buffer"))
+        goto cleanup;
+    {
+        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        VkBufferImageCopy copy{};
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.image = output;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.levelCount = 1u;
+        barrier.subresourceRange.layerCount = 1u;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u, nullptr,
+                             0u, nullptr, 1u, &barrier);
+        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.layerCount = 1u;
+        copy.imageExtent = {width, height, 1u};
+        vkCmdCopyImageToBuffer(commandBuffer, output, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               buffer, 1u, &copy);
+    }
+    if (!expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                "end SDK output readback command buffer"))
+        goto cleanup;
+    submitInfo.commandBufferCount = 1u;
+    submitInfo.pCommandBuffers = &commandBuffer;
+    if (!expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                "submit SDK output readback") ||
+        !expect(vkQueueWaitIdle(queue) == VK_SUCCESS, "finish SDK output readback"))
+        goto cleanup;
+    {
+        void* mapped = nullptr;
+        if (!expect(vkMapMemory(device, memory, 0u, byteCount, 0u, &mapped) == VK_SUCCESS,
+                    "map SDK output readback"))
+            goto cleanup;
+        uint32_t nonzeroRgb = 0u;
+        uint32_t poisonRgb = 0u;
+        uint32_t nonfinite = 0u;
+        const uint16_t* components = static_cast<const uint16_t*>(mapped);
+        for (uint32_t pixel = 0u; pixel < width * height; ++pixel) {
+            for (uint32_t channel = 0u; channel < 3u; ++channel) {
+                const uint16_t value = components[pixel * 4u + channel];
+                nonzeroRgb += value != 0u;
+                poisonRgb += value == 0xbc00u;
+                nonfinite += (value & 0x7c00u) == 0x7c00u;
+            }
+        }
+        vkUnmapMemory(device, memory);
+        if (!expect(nonfinite == 0u, "SDK output RGB is finite") ||
+            !expect(nonzeroRgb > 0u, "SDK output RGB is nonzero") ||
+            !expect(poisonRgb == 0u, "SDK output RGB fully overwrites poison"))
+            goto cleanup;
+        std::printf("FSR3.1.5 SDK Vulkan bridge output: %u nonzero RGB components\n", nonzeroRgb);
+    }
+    result = true;
+
+cleanup:
+    if (memory != VK_NULL_HANDLE)
+        vkFreeMemory(device, memory, nullptr);
+    if (buffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(device, buffer, nullptr);
+    return result;
+}
+
+} // namespace
+
+int main()
+{
+    static const wchar_t* kPipelineNames[] = {
+        L"FSR3-PREPARE-INPUTS", L"FSR3-LUMA-PYRAMID", L"FSR3-SHADING-CHANGE-PYRAMID",
+        L"FSR3-SHADING-CHANGE", L"FSR3-PREPARE-REACTIVITY", L"FSR3-LUMA-INSTABILITY",
+        L"FSR3-ACCUMULATE", L"FSR3-ACCUM_SHARP", L"FSR3-RCAS", L"FSR3-DEBUG-VIEW",
+        L"FSR3-GEN_REACTIVE",
+    };
+    VkApplicationInfo appInfo{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    VkInstanceCreateInfo instanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    VkInstance instance = VK_NULL_HANDLE;
+    VkPhysicalDevice physical = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
+    PFN_vkDestroyDebugUtilsMessengerEXT destroyMessenger = nullptr;
+    uint32_t queueFamily = 0;
+    int result = 1;
+    ValidationState validation;
+    const bool validationAvailable = has_validation_layer();
+    VkDebugUtilsMessengerCreateInfoEXT debugInfo{
+        VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    debugInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    debugInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                            VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                            VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    debugInfo.pfnUserCallback = validation_callback;
+    debugInfo.pUserData = &validation;
+    const char* layers[] = {"VK_LAYER_KHRONOS_validation"};
+    const char* instanceExtensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+    appInfo.apiVersion = VK_API_VERSION_1_2;
+    instanceInfo.pApplicationInfo = &appInfo;
+    instanceInfo.pNext = validationAvailable ? &debugInfo : nullptr;
+    instanceInfo.enabledLayerCount = validationAvailable ? 1u : 0u;
+    instanceInfo.ppEnabledLayerNames = validationAvailable ? layers : nullptr;
+    instanceInfo.enabledExtensionCount = validationAvailable ? 1u : 0u;
+    instanceInfo.ppEnabledExtensionNames = validationAvailable ? instanceExtensions : nullptr;
+    if (vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS)
+        return 77;
+    if (!validationAvailable) {
+        std::fprintf(stderr, "SKIP: Vulkan validation layer unavailable\n");
+        result = 77;
+        goto cleanup;
+    }
+    {
+        const auto createMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+        destroyMessenger = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+        if (!createMessenger || !destroyMessenger ||
+            createMessenger(instance, &debugInfo, nullptr, &messenger) != VK_SUCCESS) {
+            std::fprintf(stderr, "SKIP: Vulkan validation messenger unavailable\n");
+            result = 77;
+            goto cleanup;
+        }
+    }
+    if (!choose_compute_device(instance, &physical, &queueFamily)) {
+        result = 77;
+        goto cleanup;
+    }
+    {
+        const float priority = 1.0f;
+        VkDeviceQueueCreateInfo queueInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+        VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+        VkPhysicalDeviceFeatures2 enabledFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR derivativeFeatures{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
+        const char* extensions[1]{};
+        queueInfo.queueFamilyIndex = queueFamily;
+        queueInfo.queueCount = 1u;
+        queueInfo.pQueuePriorities = &priority;
+        if (has_extension(physical, VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME)) {
+            VkPhysicalDeviceFeatures2 supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR supportedDerivatives{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
+            supported.pNext = &supportedDerivatives;
+            vkGetPhysicalDeviceFeatures2(physical, &supported);
+            if (supportedDerivatives.computeDerivativeGroupLinear) {
+                derivativeFeatures.computeDerivativeGroupLinear = VK_TRUE;
+                enabledFeatures.pNext = &derivativeFeatures;
+                extensions[deviceInfo.enabledExtensionCount++] = VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME;
+            }
+        }
+        deviceInfo.queueCreateInfoCount = 1u;
+        deviceInfo.pQueueCreateInfos = &queueInfo;
+        deviceInfo.pNext = &enabledFeatures;
+        deviceInfo.ppEnabledExtensionNames = extensions;
+        if (vkCreateDevice(physical, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
+            result = 77;
+            goto cleanup;
+        }
+    }
+    {
+        FfxVkFsr3_3_1_5Bridge* bridge =
+            ffxVkFsr3_3_1_5CreateBridgeWithPhysicalDevice(physical, device, nullptr);
+        FfxInterface backend{};
+        backend.device = bridge;
+        backend.fpGetSDKVersion = ffxVkFsr3_3_1_5BridgeGetSDKVersion;
+        backend.fpCreateBackendContext = ffxVkFsr3_3_1_5BridgeCreateBackendContext;
+        backend.fpDestroyBackendContext = ffxVkFsr3_3_1_5BridgeDestroyBackendContext;
+        backend.fpGetDeviceCapabilities = ffxVkFsr3_3_1_5BridgeGetDeviceCapabilities;
+        backend.fpStageConstantBufferDataFunc = ffxVkFsr3_3_1_5BridgeStageConstantBufferData;
+        backend.fpCreateResource = ffxVkFsr3_3_1_5BridgeCreateResource;
+        backend.fpDestroyResource = ffxVkFsr3_3_1_5BridgeDestroyResource;
+        backend.fpGetResource = ffxVkFsr3_3_1_5BridgeGetResource;
+        backend.fpGetResourceDescription = ffxVkFsr3_3_1_5BridgeGetResourceDescription;
+        backend.fpRegisterResource = ffxVkFsr3_3_1_5BridgeRegisterResource;
+        backend.fpUnregisterResources = ffxVkFsr3_3_1_5BridgeUnregisterResources;
+        backend.fpScheduleGpuJob = ffxVkFsr3_3_1_5BridgeScheduleGpuJob;
+        backend.fpExecuteGpuJobs = ffxVkFsr3_3_1_5BridgeExecuteGpuJobs;
+        backend.fpCreatePipeline = ffxVkFsr3_3_1_5BridgeCreatePipeline;
+        backend.fpDestroyPipeline = ffxVkFsr3_3_1_5BridgeDestroyPipeline;
+        if (!expect(bridge != nullptr, "create bridge"))
+            goto cleanup;
+        for (const wchar_t* name : kPipelineNames) {
+            FfxPipelineDescription description{};
+            FfxPipelineState pipeline{};
+            std::wcsncpy(description.name, name, 63u);
+            if (!expect(ffxVkFsr3_3_1_5BridgeCreatePipeline(&backend, nullptr, &description, 1u, &pipeline) == FFX_OK,
+                        "create SDK callback pipeline") ||
+                !expect(pipeline.pipeline != nullptr, "pipeline handle") ||
+                !expect(pipeline.srvTextureCount + pipeline.uavTextureCount + pipeline.constCount > 0u,
+                        "reflected bindings")) {
+                ffxVkFsr3_3_1_5BridgeDestroyPipeline(&backend, &pipeline, 1u);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            if (!expect(ffxVkFsr3_3_1_5BridgeDestroyPipeline(&backend, &pipeline, 1u) == FFX_OK,
+                        "destroy SDK callback pipeline")) {
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+        }
+        {
+            FfxCreateResourceDescription resourceDescription{};
+            FfxResourceInternal resource{};
+            resourceDescription.heapInfo = FfxResourceHeapPlacementInfo::InitDefault();
+            resourceDescription.resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
+            resourceDescription.resourceDescription.format = FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+            resourceDescription.resourceDescription.width = 64u;
+            resourceDescription.resourceDescription.height = 32u;
+            resourceDescription.resourceDescription.depth = 1u;
+            resourceDescription.resourceDescription.mipCount = 2u;
+            resourceDescription.resourceDescription.usage = FFX_API_RESOURCE_USAGE_UAV;
+            resourceDescription.initialState = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS;
+            resourceDescription.initData.type = FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED;
+            if (!expect(ffxVkFsr3_3_1_5BridgeCreateResource(
+                            &backend, &resourceDescription, 1u, &resource) == FFX_OK,
+                        "create SDK-owned texture") ||
+                !expect(resource.internalIndex > 0, "resource handle") ||
+                !expect(ffxVkFsr3_3_1_5BridgeGetResource(&backend, resource).resource != nullptr,
+                        "resource export") ||
+                !expect(ffxVkFsr3_3_1_5BridgeDestroyResource(
+                            &backend, resource, 1u) == FFX_OK,
+                        "destroy SDK-owned texture")) {
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+        }
+        {
+            FfxCreateResourceDescription initializedImage{};
+            FfxResourceInternal resource{};
+            VkCommandPool commandPool = VK_NULL_HANDLE;
+            VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            VkQueue queue = VK_NULL_HANDLE;
+            VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            poolInfo.queueFamilyIndex = queueFamily;
+            poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            initializedImage.heapInfo = FfxResourceHeapPlacementInfo::InitDefault();
+            initializedImage.resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
+            initializedImage.resourceDescription.format = FFX_API_SURFACE_FORMAT_R32_UINT;
+            initializedImage.resourceDescription.width = 1u;
+            initializedImage.resourceDescription.height = 1u;
+            initializedImage.resourceDescription.depth = 1u;
+            initializedImage.resourceDescription.mipCount = 1u;
+            initializedImage.initialState = FFX_API_RESOURCE_STATE_COMPUTE_READ;
+            initializedImage.initData.type = FFX_RESOURCE_INIT_DATA_TYPE_VALUE;
+            initializedImage.initData.size = sizeof(uint32_t);
+            initializedImage.initData.value = 0x5au;
+            if (!expect(ffxVkFsr3_3_1_5BridgeCreateResource(
+                            &backend, &initializedImage, 1u, &resource) == FFX_OK,
+                        "queue initialized image upload") ||
+                !expect(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) == VK_SUCCESS,
+                        "create initialization command pool")) {
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            allocateInfo.commandPool = commandPool;
+            allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocateInfo.commandBufferCount = 1u;
+            if (!expect(vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) == VK_SUCCESS,
+                        "allocate initialization command buffer") ||
+                !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                        "begin initialization command buffer") ||
+                !expect(ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
+                            &backend, commandBuffer, 1u) == FFX_OK,
+                        "record initialized image upload") ||
+                !expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                        "end initialization command buffer")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            vkGetDeviceQueue(device, queueFamily, 0u, &queue);
+            submitInfo.commandBufferCount = 1u;
+            submitInfo.pCommandBuffers = &commandBuffer;
+            if (!expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit initialized image upload") ||
+                !expect(vkQueueWaitIdle(queue) == VK_SUCCESS,
+                        "finish initialized image upload") ||
+                !expect(ffxVkFsr3_3_1_5BridgeDestroyResource(
+                            &backend, resource, 1u) == FFX_OK,
+                        "destroy initialized image")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            vkDestroyCommandPool(device, commandPool, nullptr);
+        }
+        {
+            FfxFsr3UpscalerContextDescription description{};
+            FfxFsr3UpscalerContext context{};
+            VkCommandPool commandPool = VK_NULL_HANDLE;
+            VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            VkQueue queue = VK_NULL_HANDLE;
+            VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            description.backendInterface = backend;
+            description.maxRenderSize = {64u, 64u};
+            description.maxUpscaleSize = {128u, 128u};
+            description.flags = FFX_FSR3UPSCALER_ENABLE_HIGH_DYNAMIC_RANGE |
+                                FFX_FSR3UPSCALER_ENABLE_AUTO_EXPOSURE;
+            poolInfo.queueFamilyIndex = queueFamily;
+            poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            if (!expect(ffxFsr3UpscalerContextCreate(&context, &description) == FFX_OK,
+                        "create SDK host context with Vulkan resources") ||
+                !expect(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) == VK_SUCCESS,
+                        "create SDK initialization command pool")) {
+                ffxFsr3UpscalerContextDestroy(&context);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            allocateInfo.commandPool = commandPool;
+            allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocateInfo.commandBufferCount = 1u;
+            if (!expect(vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) == VK_SUCCESS,
+                        "allocate SDK initialization command buffer") ||
+                !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                        "begin SDK initialization command buffer") ||
+                !expect(ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(&backend, commandBuffer, 1u) == FFX_OK,
+                        "record all SDK initialization uploads") ||
+                !expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                        "end SDK initialization command buffer")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxFsr3UpscalerContextDestroy(&context);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            vkGetDeviceQueue(device, queueFamily, 0u, &queue);
+            submitInfo.commandBufferCount = 1u;
+            submitInfo.pCommandBuffers = &commandBuffer;
+            if (!expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit SDK initialization uploads") ||
+                !expect(vkQueueWaitIdle(queue) == VK_SUCCESS,
+                        "finish SDK initialization uploads")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+
+            /* The SDK itself owns 19 persistent resources.  These nine
+             * bridge-owned images model an application's current-frame and
+             * shared-resource imports, letting this test exercise the full
+             * public scheduler against Vulkan rather than merely its init
+             * uploads. */
+            FfxFsr3UpscalerSharedResourceDescriptions shared{};
+            FfxResourceInternal frameResources[9]{};
+            FfxApiResource frameImages[9]{};
+            const auto makeFrameImage = [&](uint32_t index,
+                                            const FfxCreateResourceDescription& source,
+                                            const void* initialData = nullptr,
+                                            size_t initialSize = 0u) -> bool {
+                FfxCreateResourceDescription resourceDescription = source;
+                resourceDescription.heapInfo = FfxResourceHeapPlacementInfo::InitDefault();
+                resourceDescription.initData = initialData ?
+                    FfxResourceInitData::FfxResourceInitBuffer(initialSize, initialData) :
+                    FfxResourceInitData{FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED};
+                return ffxVkFsr3_3_1_5BridgeCreateResource(
+                           &backend, &resourceDescription, 1u, &frameResources[index]) == FFX_OK &&
+                       (frameImages[index] = ffxVkFsr3_3_1_5BridgeGetResource(
+                            &backend, frameResources[index])).resource != nullptr;
+            };
+            const auto textureDescription = [](uint32_t width, uint32_t height,
+                                               FfxApiSurfaceFormat format,
+                                               FfxApiResourceUsage usage,
+                                               FfxApiResourceState state) {
+                FfxCreateResourceDescription resourceDescription{};
+                resourceDescription.heapInfo = FfxResourceHeapPlacementInfo::InitDefault();
+                resourceDescription.resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
+                resourceDescription.resourceDescription.format = format;
+                resourceDescription.resourceDescription.width = width;
+                resourceDescription.resourceDescription.height = height;
+                resourceDescription.resourceDescription.depth = 1u;
+                resourceDescription.resourceDescription.mipCount = 1u;
+                resourceDescription.resourceDescription.usage = usage;
+                resourceDescription.initialState = state;
+                resourceDescription.initData.type = FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED;
+                return resourceDescription;
+            };
+            const std::vector<uint16_t> colorData(64u * 64u * 4u, 0x3c00u);
+            const std::vector<uint32_t> depthData(64u * 64u, 0x3f000000u);
+            const std::vector<uint16_t> motionData(64u * 64u * 2u, 0u);
+            const std::vector<uint8_t> maskData(64u * 64u, 0u);
+            const std::vector<uint16_t> outputPoison(128u * 128u * 4u, 0xbc00u);
+            if (!expect(ffxFsr3UpscalerGetSharedResourceDescriptions(&context, &shared) == FFX_OK,
+                        "get SDK shared resource descriptions") ||
+                !expect(makeFrameImage(0u, textureDescription(64u, 64u,
+                            FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT,
+                            FFX_API_RESOURCE_USAGE_READ_ONLY,
+                            FFX_API_RESOURCE_STATE_COMPUTE_READ),
+                            colorData.data(), colorData.size() * sizeof(colorData[0])), "create current color") ||
+                !expect(makeFrameImage(1u, textureDescription(64u, 64u,
+                            FFX_API_SURFACE_FORMAT_R32_FLOAT,
+                            FFX_API_RESOURCE_USAGE_READ_ONLY,
+                            FFX_API_RESOURCE_STATE_COMPUTE_READ),
+                            depthData.data(), depthData.size() * sizeof(depthData[0])), "create current depth") ||
+                !expect(makeFrameImage(2u, textureDescription(64u, 64u,
+                            FFX_API_SURFACE_FORMAT_R16G16_FLOAT,
+                            FFX_API_RESOURCE_USAGE_READ_ONLY,
+                            FFX_API_RESOURCE_STATE_COMPUTE_READ),
+                            motionData.data(), motionData.size() * sizeof(motionData[0])), "create current motion") ||
+                !expect(makeFrameImage(3u, textureDescription(64u, 64u,
+                            FFX_API_SURFACE_FORMAT_R8_UNORM,
+                            FFX_API_RESOURCE_USAGE_READ_ONLY,
+                            FFX_API_RESOURCE_STATE_COMPUTE_READ),
+                            maskData.data(), maskData.size()), "create reactive mask") ||
+                !expect(makeFrameImage(4u, textureDescription(64u, 64u,
+                            FFX_API_SURFACE_FORMAT_R8_UNORM,
+                            FFX_API_RESOURCE_USAGE_READ_ONLY,
+                            FFX_API_RESOURCE_STATE_COMPUTE_READ),
+                            maskData.data(), maskData.size()), "create composition mask") ||
+                !expect(makeFrameImage(5u, shared.dilatedDepth), "create shared dilated depth") ||
+                !expect(makeFrameImage(6u, shared.dilatedMotionVectors), "create shared dilated motion") ||
+                !expect(makeFrameImage(7u, shared.reconstructedPrevNearestDepth),
+                        "create shared nearest depth") ||
+                !expect(makeFrameImage(8u, textureDescription(128u, 128u,
+                            FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT,
+                            FFX_API_RESOURCE_USAGE_UAV,
+                            FFX_API_RESOURCE_STATE_UNORDERED_ACCESS),
+                            outputPoison.data(), outputPoison.size() * sizeof(outputPoison[0])),
+                        "create upscaled output")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxFsr3UpscalerContextDestroy(&context);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+
+            if (!expect(vkResetCommandPool(device, commandPool, 0u) == VK_SUCCESS,
+                        "reset frame-input upload command pool") ||
+                !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                        "begin frame-input upload command buffer") ||
+                !expect(ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
+                            &backend, commandBuffer, 1u) == FFX_OK,
+                        "record deterministic frame-input uploads") ||
+                !expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                        "end frame-input upload command buffer") ||
+                !expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit deterministic frame-input uploads") ||
+                !expect(vkQueueWaitIdle(queue) == VK_SUCCESS,
+                        "finish deterministic frame-input uploads")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxFsr3UpscalerContextDestroy(&context);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+
+            FfxFsr3UpscalerDispatchDescription dispatch{};
+            dispatch.commandList = reinterpret_cast<FfxCommandList>(commandBuffer);
+            dispatch.color = frameImages[0];
+            dispatch.depth = frameImages[1];
+            dispatch.motionVectors = frameImages[2];
+            dispatch.reactive = frameImages[3];
+            dispatch.transparencyAndComposition = frameImages[4];
+            dispatch.dilatedDepth = frameImages[5];
+            dispatch.dilatedMotionVectors = frameImages[6];
+            dispatch.reconstructedPrevNearestDepth = frameImages[7];
+            dispatch.output = frameImages[8];
+            dispatch.motionVectorScale = {64.0f, 64.0f};
+            dispatch.renderSize = {64u, 64u};
+            dispatch.upscaleSize = {128u, 128u};
+            dispatch.frameTimeDelta = 16.6667f;
+            dispatch.preExposure = 1.0f;
+            dispatch.reset = true;
+            dispatch.cameraNear = 0.1f;
+            dispatch.cameraFar = 1000.0f;
+            dispatch.cameraFovAngleVertical = 1.0471975512f;
+            dispatch.viewSpaceToMetersFactor = 1.0f;
+            if (!expect(vkResetCommandPool(device, commandPool, 0u) == VK_SUCCESS,
+                        "reset SDK dispatch command pool") ||
+                !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                        "begin SDK dispatch command buffer") ||
+                !expect(ffxFsr3UpscalerContextDispatch(&context, &dispatch) == FFX_OK,
+                        "record first public SDK Vulkan dispatch") ||
+                !expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                        "end SDK dispatch command buffer") ||
+                !expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit first public SDK Vulkan dispatch") ||
+                !expect(vkQueueWaitIdle(queue) == VK_SUCCESS,
+                        "finish first public SDK Vulkan dispatch")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxFsr3UpscalerContextDestroy(&context);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            dispatch.reset = false;
+            dispatch.enableSharpening = true;
+            dispatch.sharpness = 0.25f;
+            if (!expect(vkResetCommandPool(device, commandPool, 0u) == VK_SUCCESS,
+                        "reset temporal SDK dispatch command pool") ||
+                !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                        "begin temporal SDK dispatch command buffer") ||
+                !expect(ffxFsr3UpscalerContextDispatch(&context, &dispatch) == FFX_OK,
+                        "record temporal sharpened public SDK Vulkan dispatch") ||
+                !expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                        "end temporal SDK dispatch command buffer") ||
+                !expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit temporal sharpened public SDK Vulkan dispatch") ||
+                !expect(vkQueueWaitIdle(queue) == VK_SUCCESS,
+                        "finish temporal sharpened public SDK Vulkan dispatch")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxFsr3UpscalerContextDestroy(&context);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            if (!expect(verify_rgba16f_output(
+                            physical, device, queue, commandPool,
+                            ffxVkFsr3_3_1_5BridgeGetNativeImage(bridge, frameImages[8].resource),
+                            128u, 128u), "verify reconstructed SDK output")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxFsr3UpscalerContextDestroy(&context);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            if (!expect(ffxFsr3UpscalerContextDestroy(&context) == FFX_OK,
+                        "destroy SDK host context")) {
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            for (const FfxResourceInternal resource : frameResources) {
+                if (!expect(ffxVkFsr3_3_1_5BridgeDestroyResource(
+                                &backend, resource, 1u) == FFX_OK,
+                            "destroy bridge-owned dispatch resource")) {
+                    vkDestroyCommandPool(device, commandPool, nullptr);
+                    ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                    goto cleanup;
+                }
+            }
+            vkDestroyCommandPool(device, commandPool, nullptr);
+        }
+        ffxVkFsr3_3_1_5DestroyBridge(bridge);
+    }
+    if (validation.warnings.load() == 0u && validation.errors.load() == 0u) {
+        std::puts("FSR3.1.5 SDK Vulkan bridge test passed (11 pipelines; reset+temporal frames; validation clean)");
+        result = 0;
+    } else {
+        std::fprintf(stderr, "FSR3.1.5 bridge validation failed: warnings=%u errors=%u\n",
+                     validation.warnings.load(), validation.errors.load());
+    }
+
+cleanup:
+    if (device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device);
+        vkDestroyDevice(device, nullptr);
+    }
+    if (messenger != VK_NULL_HANDLE && destroyMessenger)
+        destroyMessenger(instance, messenger, nullptr);
+    vkDestroyInstance(instance, nullptr);
+    return result;
+}
