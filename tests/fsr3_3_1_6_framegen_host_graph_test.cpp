@@ -361,7 +361,8 @@ int main()
     fiDispatch.opticalFlowSceneChangeDetection = opticalFlowScd;
     fiDispatch.opticalFlowBufferSize = {ofShared.opticalFlowVector.resourceDescription.width,
                                         ofShared.opticalFlowVector.resourceDescription.height};
-    fiDispatch.opticalFlowScale = {1.0f, 1.0f};
+    /* FI reconstructs the flow-field extent from this normalized scale. */
+    fiDispatch.opticalFlowScale = {1.0f / 1280.0f, 1.0f / 720.0f};
     fiDispatch.opticalFlowBlockSize = 8;
     fiDispatch.cameraNear = 0.1f;
     fiDispatch.cameraFar = 1000.0f;
