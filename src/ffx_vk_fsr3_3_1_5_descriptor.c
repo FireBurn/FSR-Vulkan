@@ -33,14 +33,14 @@ FfxVkPortableResult ffxVkFsr3_3_1_5CreateDescriptorSet(
     uint32_t resourceCount,
     FfxVkFsr3_3_1_5DescriptorSet* outDescriptorSet)
 {
-    VkDescriptorPoolSize poolSizes[4] = {0};
+    VkDescriptorPoolSize poolSizes[5] = {0};
     VkDescriptorImageInfo imageInfos[FFX_VK_FSR3_3_1_5_MAX_PIPELINE_BINDINGS] = {0};
     VkDescriptorBufferInfo bufferInfos[FFX_VK_FSR3_3_1_5_MAX_PIPELINE_BINDINGS] = {0};
     VkWriteDescriptorSet writes[FFX_VK_FSR3_3_1_5_MAX_PIPELINE_BINDINGS] = {0};
     VkDescriptorPoolCreateInfo poolInfo = {0};
     VkDescriptorSetAllocateInfo setInfo = {0};
     uint8_t consumed[FFX_VK_FSR3_3_1_5_MAX_PIPELINE_BINDINGS] = {0};
-    uint32_t poolCounts[4] = {0};
+    uint32_t poolCounts[5] = {0};
     uint32_t writeCount = 0;
     uint32_t poolCount = 0;
 
@@ -90,10 +90,26 @@ FfxVkPortableResult ffxVkFsr3_3_1_5CreateDescriptorSet(
             writes[writeCount].pImageInfo = &imageInfos[writeCount];
             ++writeCount;
             break;
+        case FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_SRV:
+        case FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_UAV:
+            if (resources[resourceIndex].buffer == VK_NULL_HANDLE ||
+                resources[resourceIndex].bufferRange == 0u)
+                return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
+            ++poolCounts[2];
+            writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[writeCount].dstBinding = binding->binding;
+            writes[writeCount].descriptorCount = 1u;
+            writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bufferInfos[writeCount].buffer = resources[resourceIndex].buffer;
+            bufferInfos[writeCount].offset = resources[resourceIndex].bufferOffset;
+            bufferInfos[writeCount].range = resources[resourceIndex].bufferRange;
+            writes[writeCount].pBufferInfo = &bufferInfos[writeCount];
+            ++writeCount;
+            break;
         case FFX_VK_FSR3_3_1_5_DESCRIPTOR_CONSTANT_BUFFER:
             if (resources[resourceIndex].buffer == VK_NULL_HANDLE || resources[resourceIndex].bufferRange == 0u)
                 return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
-            ++poolCounts[2];
+            ++poolCounts[3];
             writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[writeCount].dstBinding = binding->binding;
             writes[writeCount].descriptorCount = 1u;
@@ -105,7 +121,7 @@ FfxVkPortableResult ffxVkFsr3_3_1_5CreateDescriptorSet(
             ++writeCount;
             break;
         case FFX_VK_FSR3_3_1_5_DESCRIPTOR_SAMPLER:
-            ++poolCounts[3];
+            ++poolCounts[4];
             break;
         default:
             return FFX_VK_PORTABLE_ERROR_UNSUPPORTED;
@@ -115,10 +131,11 @@ FfxVkPortableResult ffxVkFsr3_3_1_5CreateDescriptorSet(
         if (!consumed[index])
             return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
     }
-    for (uint32_t index = 0; index < 4u; ++index) {
+    for (uint32_t index = 0; index < 5u; ++index) {
         static const VkDescriptorType types[] = {
             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLER};
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            VK_DESCRIPTOR_TYPE_SAMPLER};
         if (poolCounts[index]) {
             poolSizes[poolCount].type = types[index];
             poolSizes[poolCount].descriptorCount = poolCounts[index];

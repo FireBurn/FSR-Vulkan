@@ -22,12 +22,15 @@ static int descriptor_class(const char* name, FfxVkFsr3_3_1_5DescriptorClass* ou
 {
     if (!name || !outClass)
         return 0;
+    const int isBuffer = strstr(name, "counters") != NULL;
     if (strncmp(name, "rw_", 3u) == 0) {
-        *outClass = FFX_VK_FSR3_3_1_5_DESCRIPTOR_UAV;
+        *outClass = isBuffer ? FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_UAV :
+                              FFX_VK_FSR3_3_1_5_DESCRIPTOR_UAV;
         return 1;
     }
     if (strncmp(name, "r_", 2u) == 0) {
-        *outClass = FFX_VK_FSR3_3_1_5_DESCRIPTOR_SRV;
+        *outClass = isBuffer ? FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_SRV :
+                              FFX_VK_FSR3_3_1_5_DESCRIPTOR_SRV;
         return 1;
     }
     if (strncmp(name, "s_", 2u) == 0) {

@@ -372,6 +372,8 @@ static bool record_compute_job(FfxVkFsr3_3_1_5Bridge* bridge,
     uint32_t descriptorCount = 0u;
     uint32_t srvIndex = 0u;
     uint32_t uavIndex = 0u;
+    uint32_t srvBufferIndex = 0u;
+    uint32_t uavBufferIndex = 0u;
     uint32_t cbIndex = 0u;
     for (uint32_t index = 0; index < pipeline->pipeline.bindingCount; ++index) {
         const FfxVkFsr3_3_1_5DescriptorBinding& binding = pipeline->pipeline.bindings[index];
@@ -404,6 +406,32 @@ static bool record_compute_job(FfxVkFsr3_3_1_5Bridge* bridge,
             ++descriptorCount;
             break;
         }
+        case FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_SRV: {
+            if (srvBufferIndex >= job.pipeline->srvBufferCount)
+                return false;
+            const FfxBufferSRV& srv = job.srvBuffers[srvBufferIndex++];
+            BridgeResource* resource = lookup_resource(bridge, srv.resource.internalIndex);
+            if (!resource || resource->buffer == VK_NULL_HANDLE || srv.size == 0u)
+                return false;
+            descriptor.buffer = resource->buffer;
+            descriptor.bufferOffset = srv.offset;
+            descriptor.bufferRange = srv.size;
+            ++descriptorCount;
+            break;
+        }
+        case FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_UAV: {
+            if (uavBufferIndex >= job.pipeline->uavBufferCount)
+                return false;
+            const FfxBufferUAV& uav = job.uavBuffers[uavBufferIndex++];
+            BridgeResource* resource = lookup_resource(bridge, uav.resource.internalIndex);
+            if (!resource || resource->buffer == VK_NULL_HANDLE || uav.size == 0u)
+                return false;
+            descriptor.buffer = resource->buffer;
+            descriptor.bufferOffset = uav.offset;
+            descriptor.bufferRange = uav.size;
+            ++descriptorCount;
+            break;
+        }
         case FFX_VK_FSR3_3_1_5_DESCRIPTOR_CONSTANT_BUFFER: {
             if (cbIndex >= job.pipeline->constCount)
                 return false;
@@ -424,7 +452,10 @@ static bool record_compute_job(FfxVkFsr3_3_1_5Bridge* bridge,
         }
     }
     if (srvIndex != job.pipeline->srvTextureCount ||
-        uavIndex != job.pipeline->uavTextureCount || cbIndex != job.pipeline->constCount)
+        uavIndex != job.pipeline->uavTextureCount ||
+        srvBufferIndex != job.pipeline->srvBufferCount ||
+        uavBufferIndex != job.pipeline->uavBufferCount ||
+        cbIndex != job.pipeline->constCount)
         return false;
 
     std::unique_ptr<BridgeDescriptorSet> descriptorSet(new (std::nothrow) BridgeDescriptorSet);
@@ -1251,6 +1282,16 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreatePipeline(
         case FFX_VK_FSR3_3_1_5_DESCRIPTOR_UAV:
             appendResult = append_binding(outPipeline->uavTextureBindings,
                                           &outPipeline->uavTextureCount,
+                                          FFX_MAX_NUM_UAVS, binding);
+            break;
+        case FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_SRV:
+            appendResult = append_binding(outPipeline->srvBufferBindings,
+                                          &outPipeline->srvBufferCount,
+                                          FFX_MAX_NUM_SRVS, binding);
+            break;
+        case FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_UAV:
+            appendResult = append_binding(outPipeline->uavBufferBindings,
+                                          &outPipeline->uavBufferCount,
                                           FFX_MAX_NUM_UAVS, binding);
             break;
         case FFX_VK_FSR3_3_1_5_DESCRIPTOR_CONSTANT_BUFFER:
