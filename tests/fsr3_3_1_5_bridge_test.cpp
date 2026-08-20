@@ -232,13 +232,247 @@ void destroy_external_image(VkDevice device, ExternalImage* image)
 VkFormat vk_format_from_ffx(uint32_t format)
 {
     switch (format) {
+    case FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM: return VK_FORMAT_R8G8B8A8_UNORM;
     case FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case FFX_API_SURFACE_FORMAT_R32_FLOAT: return VK_FORMAT_R32_SFLOAT;
     case FFX_API_SURFACE_FORMAT_R32_UINT: return VK_FORMAT_R32_UINT;
     case FFX_API_SURFACE_FORMAT_R16G16_FLOAT: return VK_FORMAT_R16G16_SFLOAT;
+    case FFX_API_SURFACE_FORMAT_R16G16_SINT: return VK_FORMAT_R16G16_SINT;
     case FFX_API_SURFACE_FORMAT_R8_UNORM: return VK_FORMAT_R8_UNORM;
     default: return VK_FORMAT_UNDEFINED;
     }
+}
+
+/*
+ * Execute the public SDK 3.1.6 reset graph against real Vulkan images.  This
+ * deliberately uses the common 3.1.5-named bridge: the bridge is an
+ * effect-neutral FfxInterface implementation and must not have an upscaler
+ * dependency hidden in its resource or descriptor paths.
+ */
+bool dispatch_fi_of_reset_frame(
+    VkPhysicalDevice physical, VkDevice device, uint32_t queueFamily,
+    FfxVkFsr3_3_1_5Bridge* bridge, FfxInterface* backend,
+    FfxOpticalflowContext* opticalFlow, FfxFrameInterpolationContext* frameInterpolation)
+{
+    FfxOpticalflowSharedResourceDescriptions ofShared{};
+    FfxFrameInterpolationSharedResourceDescriptions fiShared{};
+    ExternalImage images[9]{};
+    FfxVkFsr3_3_1_5Resource imported[9]{};
+    FfxApiResource resources[9]{};
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    VkQueue queue = VK_NULL_HANDLE;
+    VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    bool ok = bridge && backend && opticalFlow && frameInterpolation;
+    const char* stage = "validate arguments";
+
+    struct ImageDescription {
+        VkFormat format;
+        uint32_t width;
+        uint32_t height;
+        bool writable;
+    } descriptions[9]{};
+    if (ok) {
+        stage = "query FI/OF shared resources";
+        ok = ffxOpticalflowGetSharedResourceDescriptions(opticalFlow, &ofShared) == FFX_OK &&
+             ffxFrameInterpolationGetSharedResourceDescriptions(frameInterpolation, &fiShared) == FFX_OK;
+    }
+    if (ok) {
+        descriptions[0] = {VK_FORMAT_R8G8B8A8_UNORM, 128u, 128u, false};
+        descriptions[1] = {vk_format_from_ffx(ofShared.opticalFlowVector.resourceDescription.format),
+                           ofShared.opticalFlowVector.resourceDescription.width,
+                           ofShared.opticalFlowVector.resourceDescription.height, true};
+        descriptions[2] = {vk_format_from_ffx(ofShared.opticalFlowSCD.resourceDescription.format),
+                           ofShared.opticalFlowSCD.resourceDescription.width,
+                           ofShared.opticalFlowSCD.resourceDescription.height, true};
+        descriptions[3] = {VK_FORMAT_R32_SFLOAT, 64u, 64u, false};
+        descriptions[4] = {VK_FORMAT_R16G16_SFLOAT, 64u, 64u, false};
+        descriptions[5] = {vk_format_from_ffx(fiShared.dilatedDepth.resourceDescription.format),
+                           fiShared.dilatedDepth.resourceDescription.width,
+                           fiShared.dilatedDepth.resourceDescription.height, true};
+        descriptions[6] = {vk_format_from_ffx(fiShared.dilatedMotionVectors.resourceDescription.format),
+                           fiShared.dilatedMotionVectors.resourceDescription.width,
+                           fiShared.dilatedMotionVectors.resourceDescription.height, true};
+        descriptions[7] = {vk_format_from_ffx(fiShared.reconstructedPrevNearestDepth.resourceDescription.format),
+                           fiShared.reconstructedPrevNearestDepth.resourceDescription.width,
+                           fiShared.reconstructedPrevNearestDepth.resourceDescription.height, true};
+        descriptions[8] = {VK_FORMAT_R8G8B8A8_UNORM, 128u, 128u, true};
+    }
+    for (uint32_t index = 0u; ok && index < 9u; ++index) {
+        const VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        FfxVkFsr3_3_1_5ImportedImageDescription description{};
+        stage = "create and import FI/OF application image";
+        ok = descriptions[index].format != VK_FORMAT_UNDEFINED &&
+             create_external_image(physical, device, descriptions[index].width,
+                                   descriptions[index].height, descriptions[index].format,
+                                   usage, &images[index]);
+        if (!ok) {
+            std::fprintf(stderr, "FSR3.1.6 FI/OF image %u allocation failed (format %d, %ux%u, writable %u)\n",
+                         index, (int)descriptions[index].format, descriptions[index].width,
+                         descriptions[index].height, descriptions[index].writable ? 1u : 0u);
+            break;
+        }
+        description.image = images[index].image;
+        description.format = descriptions[index].format;
+        description.width = descriptions[index].width;
+        description.height = descriptions[index].height;
+        description.mipCount = 1u;
+        description.arrayLayers = 1u;
+        description.layout = descriptions[index].writable ? VK_IMAGE_LAYOUT_GENERAL :
+                                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        description.state = descriptions[index].writable
+            ? FFX_VK_FSR3_3_1_5_RESOURCE_STATE_UNORDERED_ACCESS
+            : FFX_VK_FSR3_3_1_5_RESOURCE_STATE_COMPUTE_READ;
+        description.usage = usage;
+        imported[index] = ffxVkFsr3_3_1_5BridgeImportImage(bridge, &description);
+        resources[index] = ffxVkFsr3_3_1_5BridgeResolveResource(bridge, imported[index]);
+        ok = imported[index].resource != nullptr && resources[index].resource != nullptr;
+        if (!ok)
+            std::fprintf(stderr, "FSR3.1.6 FI/OF image %u import failed (format %d, %ux%u, writable %u)\n",
+                         index, (int)description.format, description.width, description.height,
+                         descriptions[index].writable ? 1u : 0u);
+    }
+    poolInfo.queueFamilyIndex = queueFamily;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocateInfo.commandBufferCount = 1u;
+    if (ok) {
+        stage = "create FI/OF dispatch command pool";
+        ok = vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) == VK_SUCCESS;
+    }
+    allocateInfo.commandPool = commandPool;
+    if (ok) {
+        stage = "allocate FI/OF dispatch command buffer";
+        ok = vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) == VK_SUCCESS;
+    }
+    if (ok) {
+        stage = "begin FI/OF dispatch command buffer";
+        ok = vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS;
+    }
+    if (ok) {
+        VkImageMemoryBarrier barriers[9]{};
+        for (uint32_t index = 0u; index < 9u; ++index) {
+            barriers[index].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barriers[index].dstAccessMask = descriptions[index].writable
+                ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
+            barriers[index].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barriers[index].newLayout = descriptions[index].writable
+                ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barriers[index].image = images[index].image;
+            barriers[index].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barriers[index].subresourceRange.levelCount = 1u;
+            barriers[index].subresourceRange.layerCount = 1u;
+        }
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
+                             0u, nullptr, 9u, barriers);
+
+        FfxOpticalflowDispatchDescription opticalFlowDispatch{};
+        opticalFlowDispatch.commandList = reinterpret_cast<FfxCommandList>(commandBuffer);
+        opticalFlowDispatch.color = resources[0];
+        opticalFlowDispatch.opticalFlowVector = resources[1];
+        opticalFlowDispatch.opticalFlowSCD = resources[2];
+        opticalFlowDispatch.reset = true;
+        opticalFlowDispatch.backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+        opticalFlowDispatch.minMaxLuminance = {0.0f, 1.0f};
+        stage = "record FI/OF optical-flow dispatch";
+        const FfxErrorCode opticalFlowResult =
+            ffxOpticalflowContextDispatch(opticalFlow, &opticalFlowDispatch);
+        ok = opticalFlowResult == FFX_OK;
+        if (!ok)
+            std::fprintf(stderr, "FSR3.1.6 optical-flow dispatch returned %u\n",
+                         static_cast<unsigned>(opticalFlowResult));
+
+        FfxFrameInterpolationPrepareDescription prepare{};
+        prepare.commandList = reinterpret_cast<FfxCommandList>(commandBuffer);
+        prepare.renderSize = {64u, 64u};
+        prepare.motionVectorScale = {64.0f, 64.0f};
+        prepare.frameTimeDelta = 16.6667f;
+        prepare.cameraNear = 0.1f;
+        prepare.cameraFar = 1000.0f;
+        prepare.viewSpaceToMetersFactor = 1.0f;
+        prepare.cameraFovAngleVertical = 1.0471975512f;
+        prepare.depth = resources[3];
+        prepare.motionVectors = resources[4];
+        prepare.frameID = 1u;
+        prepare.dilatedDepth = resources[5];
+        prepare.dilatedMotionVectors = resources[6];
+        prepare.reconstructedPrevDepth = resources[7];
+        prepare.cameraUp[1] = 1.0f;
+        prepare.cameraRight[0] = 1.0f;
+        prepare.cameraForward[2] = -1.0f;
+        stage = "record FI prepare dispatch";
+        if (ok) {
+            const FfxErrorCode prepareResult = ffxFrameInterpolationPrepare(frameInterpolation, &prepare);
+            ok = prepareResult == FFX_OK;
+            if (!ok)
+                std::fprintf(stderr, "FSR3.1.6 FI prepare returned %u\n",
+                             static_cast<unsigned>(prepareResult));
+        }
+
+        FfxFrameInterpolationDispatchDescription dispatch{};
+        dispatch.commandList = reinterpret_cast<FfxCommandList>(commandBuffer);
+        dispatch.displaySize = {128u, 128u};
+        dispatch.renderSize = {64u, 64u};
+        dispatch.currentBackBuffer = resources[0];
+        dispatch.output = resources[8];
+        dispatch.interpolationRect = {0, 0, 128, 128};
+        dispatch.opticalFlowVector = resources[1];
+        dispatch.opticalFlowSceneChangeDetection = resources[2];
+        dispatch.opticalFlowBufferSize = {ofShared.opticalFlowVector.resourceDescription.width,
+                                          ofShared.opticalFlowVector.resourceDescription.height};
+        dispatch.opticalFlowScale = {1.0f, 1.0f};
+        dispatch.opticalFlowBlockSize = 8u;
+        dispatch.frameTimeDelta = 16.6667f;
+        dispatch.reset = true;
+        dispatch.cameraNear = prepare.cameraNear;
+        dispatch.cameraFar = prepare.cameraFar;
+        dispatch.cameraFovAngleVertical = prepare.cameraFovAngleVertical;
+        dispatch.viewSpaceToMetersFactor = prepare.viewSpaceToMetersFactor;
+        dispatch.backBufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+        dispatch.minMaxLuminance[0] = 0.0f;
+        dispatch.minMaxLuminance[1] = 1.0f;
+        dispatch.frameID = 1u;
+        dispatch.dilatedDepth = resources[5];
+        dispatch.dilatedMotionVectors = resources[6];
+        dispatch.reconstructedPrevDepth = resources[7];
+        stage = "record FI dispatch";
+        if (ok) {
+            const FfxErrorCode dispatchResult = ffxFrameInterpolationDispatch(frameInterpolation, &dispatch);
+            ok = dispatchResult == FFX_OK;
+            if (!ok)
+                std::fprintf(stderr, "FSR3.1.6 FI dispatch returned %u\n",
+                             static_cast<unsigned>(dispatchResult));
+        }
+    }
+    if (ok) {
+        stage = "end FI/OF dispatch command buffer";
+        const VkResult endResult = vkEndCommandBuffer(commandBuffer);
+        if (endResult != VK_SUCCESS)
+            std::fprintf(stderr, "FSR3.1.6 FI/OF vkEndCommandBuffer returned %d\n", (int)endResult);
+        ok = endResult == VK_SUCCESS;
+    }
+    if (ok) {
+        vkGetDeviceQueue(device, queueFamily, 0u, &queue);
+        submitInfo.commandBufferCount = 1u;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        stage = "submit FI/OF reset frame";
+        ok = vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS &&
+             vkQueueWaitIdle(queue) == VK_SUCCESS;
+    }
+    if (commandPool != VK_NULL_HANDLE)
+        vkDestroyCommandPool(device, commandPool, nullptr);
+    for (uint32_t index = 0u; index < 9u; ++index) {
+        ffxVkFsr3_3_1_5BridgeReleaseImportedImage(bridge, imported[index]);
+        destroy_external_image(device, &images[index]);
+    }
+    if (!ok)
+        std::fprintf(stderr, "FSR3.1.6 FI/OF reset-frame failure at: %s\n", stage);
+    return expect(ok, "record and submit real SDK 3.1.6 FI/OF reset frame");
 }
 
 bool verify_rgba16f_output(VkPhysicalDevice physical, VkDevice device, VkQueue queue,
@@ -547,6 +781,13 @@ int main()
                 goto cleanup;
             }
             vkDestroyCommandPool(device, initializationPool, nullptr);
+            if (!dispatch_fi_of_reset_frame(physical, device, queueFamily, bridge, &backend,
+                                            &opticalFlow, &frameInterpolation)) {
+                ffxFrameInterpolationContextDestroy(&frameInterpolation);
+                ffxOpticalflowContextDestroy(&opticalFlow);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
             ffxFrameInterpolationContextDestroy(&frameInterpolation);
             ffxOpticalflowContextDestroy(&opticalFlow);
         } else {

@@ -57,6 +57,8 @@ output_dir=$(CDPATH= cd -- "$output_dir" && pwd)
 
 staging=$(mktemp -d)
 trap 'find -- "$staging" -depth -delete; rmdir -- "$staging" 2>/dev/null || true' EXIT
+overlay_dir="$staging/overlay"
+python3 "$script_dir/prepare_fsr3_3_1_6_vulkan_sources.py" "$framegen_include" "$overlay_dir"
 
 common_args=(
     -spirv
@@ -66,6 +68,7 @@ common_args=(
     -DFFX_GPU=1
     -DFFX_HLSL=1
     -I "$core_include"
+    -I "$overlay_dir"
     -I "$framegen_include"
 )
 
