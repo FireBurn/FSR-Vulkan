@@ -566,7 +566,10 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         set_tests_properties(ffx_vk_fsr3_3_1_5_pipeline_test PROPERTIES
             RUN_SERIAL TRUE
             SKIP_RETURN_CODE 77)
-        add_executable(ffx_vk_fsr3_3_1_5_bridge_test tests/fsr3_3_1_5_bridge_test.cpp)
+        add_executable(ffx_vk_fsr3_3_1_5_bridge_test
+            tests/fsr3_3_1_5_bridge_test.cpp
+            $<TARGET_OBJECTS:ffx_vulkan_fsr3_framegen_3_1_6_scaffold>
+            $<TARGET_OBJECTS:ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold>)
         set_target_properties(ffx_vk_fsr3_3_1_5_bridge_test PROPERTIES
             CXX_STANDARD 20
             CXX_STANDARD_REQUIRED YES
@@ -577,6 +580,8 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
             "${FFX_2_3_0_ROOT}/upscalers/include"
             "${FFX_2_3_0_ROOT}/upscalers/fsr3/include"
             "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/include"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal"
             "${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}")
         target_compile_definitions(ffx_vk_fsr3_3_1_5_bridge_test PRIVATE
             ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})

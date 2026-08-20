@@ -7,6 +7,8 @@
 
 #include "ffx_interface.h"
 #include "ffx_fsr3upscaler.h"
+#include "ffx_frameinterpolation.h"
+#include "ffx_opticalflow.h"
 #include "ffx_vk_fsr3_3_1_6_framegen_embedded_spirv.h"
 
 #include <cwchar>
@@ -361,6 +363,7 @@ int main()
     PFN_vkDestroyDebugUtilsMessengerEXT destroyMessenger = nullptr;
     uint32_t queueFamily = 0;
     int result = 1;
+    bool storageImageWithoutFormat = false;
     ValidationState validation;
     const bool validationAvailable = has_validation_layer();
     VkDebugUtilsMessengerCreateInfoEXT debugInfo{
@@ -409,18 +412,26 @@ int main()
         VkDeviceQueueCreateInfo queueInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         VkPhysicalDeviceFeatures2 enabledFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceFeatures2 supportedFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
         VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR derivativeFeatures{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
         const char* extensions[1]{};
         queueInfo.queueFamilyIndex = queueFamily;
         queueInfo.queueCount = 1u;
         queueInfo.pQueuePriorities = &priority;
+        vkGetPhysicalDeviceFeatures2(physical, &supportedFeatures);
+        storageImageWithoutFormat =
+            supportedFeatures.features.shaderStorageImageReadWithoutFormat == VK_TRUE &&
+            supportedFeatures.features.shaderStorageImageWriteWithoutFormat == VK_TRUE;
+        if (storageImageWithoutFormat) {
+            enabledFeatures.features.shaderStorageImageReadWithoutFormat = VK_TRUE;
+            enabledFeatures.features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+        }
         if (has_extension(physical, VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME)) {
-            VkPhysicalDeviceFeatures2 supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
             VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR supportedDerivatives{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
-            supported.pNext = &supportedDerivatives;
-            vkGetPhysicalDeviceFeatures2(physical, &supported);
+            supportedFeatures.pNext = &supportedDerivatives;
+            vkGetPhysicalDeviceFeatures2(physical, &supportedFeatures);
             if (supportedDerivatives.computeDerivativeGroupLinear) {
                 derivativeFeatures.computeDerivativeGroupLinear = VK_TRUE;
                 enabledFeatures.pNext = &derivativeFeatures;
@@ -458,6 +469,89 @@ int main()
         backend.fpDestroyPipeline = ffxVkFsr3_3_1_5BridgeDestroyPipeline;
         if (!expect(bridge != nullptr, "create bridge"))
             goto cleanup;
+        if (storageImageWithoutFormat) {
+            FfxOpticalflowContext opticalFlow{};
+            FfxOpticalflowContextDescription opticalFlowDescription{};
+            opticalFlowDescription.backendInterface = backend;
+            opticalFlowDescription.resolution = {128u, 128u};
+            FfxFrameInterpolationContext frameInterpolation{};
+            FfxFrameInterpolationContextDescription frameInterpolationDescription{};
+            frameInterpolationDescription.backendInterface = backend;
+            frameInterpolationDescription.maxRenderSize = {64u, 64u};
+            frameInterpolationDescription.displaySize = {128u, 128u};
+            frameInterpolationDescription.backBufferFormat = FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
+            frameInterpolationDescription.previousInterpolationSourceFormat =
+                FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
+            if (!expect(ffxOpticalflowContextCreate(&opticalFlow, &opticalFlowDescription) == FFX_OK,
+                        "create FI/OF optical-flow Vulkan context") ||
+                !expect(ffxFrameInterpolationContextCreate(
+                            &frameInterpolation, &frameInterpolationDescription) == FFX_OK,
+                        "create FI/OF frame-interpolation Vulkan context")) {
+                ffxFrameInterpolationContextDestroy(&frameInterpolation);
+                ffxOpticalflowContextDestroy(&opticalFlow);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            VkCommandPool initializationPool = VK_NULL_HANDLE;
+            VkCommandBuffer initializationCommands = VK_NULL_HANDLE;
+            VkCommandPoolCreateInfo initializationPoolInfo{
+                VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            VkCommandBufferAllocateInfo initializationAllocateInfo{
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            VkCommandBufferBeginInfo initializationBeginInfo{
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            VkSubmitInfo initializationSubmitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            VkQueue initializationQueue = VK_NULL_HANDLE;
+            initializationPoolInfo.queueFamilyIndex = queueFamily;
+            initializationPoolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            initializationAllocateInfo.commandPool = initializationPool;
+            initializationAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            initializationAllocateInfo.commandBufferCount = 1u;
+            if (!expect(vkCreateCommandPool(device, &initializationPoolInfo, nullptr,
+                                             &initializationPool) == VK_SUCCESS,
+                        "create FI/OF initialization command pool")) {
+                ffxFrameInterpolationContextDestroy(&frameInterpolation);
+                ffxOpticalflowContextDestroy(&opticalFlow);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            initializationAllocateInfo.commandPool = initializationPool;
+            if (!expect(vkAllocateCommandBuffers(device, &initializationAllocateInfo,
+                                                  &initializationCommands) == VK_SUCCESS,
+                        "allocate FI/OF initialization commands") ||
+                !expect(vkBeginCommandBuffer(initializationCommands, &initializationBeginInfo) == VK_SUCCESS,
+                        "begin FI/OF initialization commands") ||
+                !expect(ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
+                            &backend, initializationCommands, 1u) == FFX_OK,
+                        "record FI/OF initialization jobs") ||
+                !expect(vkEndCommandBuffer(initializationCommands) == VK_SUCCESS,
+                        "end FI/OF initialization commands")) {
+                vkDestroyCommandPool(device, initializationPool, nullptr);
+                ffxFrameInterpolationContextDestroy(&frameInterpolation);
+                ffxOpticalflowContextDestroy(&opticalFlow);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            vkGetDeviceQueue(device, queueFamily, 0u, &initializationQueue);
+            initializationSubmitInfo.commandBufferCount = 1u;
+            initializationSubmitInfo.pCommandBuffers = &initializationCommands;
+            if (!expect(vkQueueSubmit(initializationQueue, 1u, &initializationSubmitInfo,
+                                       VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit FI/OF initialization jobs") ||
+                !expect(vkQueueWaitIdle(initializationQueue) == VK_SUCCESS,
+                        "complete FI/OF initialization jobs")) {
+                vkDestroyCommandPool(device, initializationPool, nullptr);
+                ffxFrameInterpolationContextDestroy(&frameInterpolation);
+                ffxOpticalflowContextDestroy(&opticalFlow);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            vkDestroyCommandPool(device, initializationPool, nullptr);
+            ffxFrameInterpolationContextDestroy(&frameInterpolation);
+            ffxOpticalflowContextDestroy(&opticalFlow);
+        } else {
+            std::fprintf(stderr, "SKIP: storage-image read/write-without-format unavailable; FI/OF create omitted\n");
+        }
         {
             ExternalImage image{};
             VkCommandPool commandPool = VK_NULL_HANDLE;

@@ -249,8 +249,12 @@ and declare storage-image read/write-without-format capabilities. Commit
 metadata, the SDK buffer tables, Vulkan storage-buffer descriptors, and
 compute-job recording. Its current name-based `counters` classifier is a
 measured compatibility step, not a substitute for arbitrary SPIR-V type
-reflection. Explicit logical-device feature negotiation and a
-validation-clean context creation remain required before enabling the path.
+reflection. The RX 6800M bridge test now queries and enables the two required
+storage-image-without-format feature bits only when both are supported, then
+creates FI and OF contexts and submits their initialization jobs with no Vulkan
+validation warning or error. This establishes the context-creation seam only;
+importing real frame resources and dispatching Optical Flow plus FI remain the
+next validation gate.
 
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally
