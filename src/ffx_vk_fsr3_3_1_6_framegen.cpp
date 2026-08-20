@@ -209,6 +209,17 @@ static bool valid_image(const FfxVkFsr3_3_1_6FrameGenerationImage& image,
            (image.usage & required) == required;
 }
 
+static bool valid_motion_image(const FfxVkFsr3_3_1_6FrameGenerationImage& image,
+                               uint32_t width, uint32_t height)
+{
+    /* The SDK contract consumes XY motion. Q2RTX stores the same normalized
+     * float XY pair in FLAT_MOTION.RG while retaining depth derivatives in BA;
+     * sampled SPIR-V has no storage-image format restriction on this input. */
+    return (image.format == VK_FORMAT_R16G16_SFLOAT ||
+            image.format == VK_FORMAT_R16G16B16A16_SFLOAT) &&
+           valid_image(image, image.format, width, height, false);
+}
+
 static FfxVkFsr3_3_1_5Resource import_frame_image(
     FfxVkFsr3_3_1_5Bridge* bridge,
     const FfxVkFsr3_3_1_6FrameGenerationImage& image, bool writable)
@@ -375,7 +386,7 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
         info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
         !valid_image(info->color, context->colorFormat, 1u, 1u, false) ||
         !valid_image(info->depth, VK_FORMAT_R32_SFLOAT, info->renderWidth, info->renderHeight, false) ||
-        !valid_image(info->motionVectors, VK_FORMAT_R16G16_SFLOAT, info->renderWidth, info->renderHeight, false))
+        !valid_motion_image(info->motionVectors, info->renderWidth, info->renderHeight))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     if (!context->initialized) {
         const OwnedSharedImage shared[] = {
