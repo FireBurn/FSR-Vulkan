@@ -474,15 +474,32 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
         info->transferFunction < FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB ||
         info->transferFunction > FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ||
         !valid_image(info->color, context->colorFormat, info->displayWidth, info->displayHeight, false) ||
-        !valid_image(info->output, context->colorFormat, info->displayWidth, info->displayHeight, true))
+        !valid_image(info->output, context->colorFormat, info->displayWidth, info->displayHeight, true) ||
+        (info->distortionField.image != VK_NULL_HANDLE &&
+         !valid_image(info->distortionField, VK_FORMAT_R16G16_SFLOAT, 1u, 1u, false)))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     if (info->color.image != ffxVkFsr3_3_1_5BridgeGetNativeImage(context->bridge, context->color.resource))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     const FfxVkFsr3_3_1_5Resource output = import_frame_image(context->bridge, info->output, true);
     const FfxApiResource outputResource = ffxVkFsr3_3_1_5BridgeResolveResource(context->bridge, output);
-    if (!outputResource.resource)
+    if (!outputResource.resource) {
+        ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, output);
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_OUT_OF_MEMORY;
+    }
+    FfxVkFsr3_3_1_5Resource distortion{};
+    FfxApiResource distortionResource{};
+    if (info->distortionField.image != VK_NULL_HANDLE) {
+        distortion = import_frame_image(context->bridge, info->distortionField, false);
+        distortionResource = ffxVkFsr3_3_1_5BridgeResolveResource(context->bridge, distortion);
+        if (!distortionResource.resource) {
+            ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, distortion);
+            ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, output);
+            return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_OUT_OF_MEMORY;
+        }
+    }
     context->pendingImports.push_back(output);
+    if (distortion.resource)
+        context->pendingImports.push_back(distortion);
     FfxFrameInterpolationDispatchDescription dispatch{};
     dispatch.commandList = reinterpret_cast<FfxCommandList>(info->commandBuffer);
     dispatch.displaySize = {info->displayWidth, info->displayHeight};
@@ -520,6 +537,7 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
     dispatch.dilatedDepth = context->dilatedDepth.resource;
     dispatch.dilatedMotionVectors = context->dilatedMotionVectors.resource;
     dispatch.reconstructedPrevDepth = context->reconstructedPreviousDepth.resource;
+    dispatch.distortionField = distortionResource;
     const FfxErrorCode result = ffxFrameInterpolationDispatch(&context->interpolation, &dispatch);
     if (result != FFX_OK)
         return result_from_ffx(result);

@@ -160,7 +160,7 @@ FfxVkFsr3_3_1_6FrameGenerationImage image_info(
 
 bool initialize_images(VkCommandBuffer commandBuffer, const Image* images, uint32_t count)
 {
-    VkImageMemoryBarrier barriers[4]{};
+    VkImageMemoryBarrier barriers[5]{};
     for (uint32_t index = 0u; index < count; ++index) {
         barriers[index].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barriers[index].dstAccessMask = index == 3u ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
@@ -182,10 +182,10 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
                   const Image* images, VkFormat colorFormat, VkFormat motionFormat,
                   FfxVkFsr3_3_1_6FrameGenerationTransferFunction transferFunction,
                   float maxLuminance,
-                  uint64_t frameId, bool reset, bool initialize)
+                  uint64_t frameId, bool reset, bool initialize, bool useDistortion)
 {
     if (initialize)
-        initialize_images(commandBuffer, images, 4u);
+        initialize_images(commandBuffer, images, 5u);
     FfxVkFsr3_3_1_6FrameGenerationPrepareInfo prepare{};
     prepare.commandBuffer = commandBuffer;
     prepare.color = image_info(images[0], colorFormat, 128u, 128u,
@@ -219,6 +219,9 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     dispatch.color = prepare.color;
     dispatch.output = image_info(images[3], colorFormat, 128u, 128u,
                                  VK_IMAGE_LAYOUT_GENERAL);
+    if (useDistortion)
+        dispatch.distortionField = image_info(images[4], VK_FORMAT_R16G16_SFLOAT, 128u, 128u,
+                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     dispatch.displayWidth = 128u;
     dispatch.displayHeight = 128u;
     dispatch.interpolationWidth = 128u;
@@ -268,7 +271,7 @@ int main()
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
     PFN_vkDestroyDebugUtilsMessengerEXT destroyMessenger = nullptr;
     FfxVkFsr3_3_1_6FrameGenerationContext* context = nullptr;
-    Image images[4]{};
+    Image images[5]{};
     const float priority = 1.0f;
     uint32_t family = 0u;
     int result = 1;
@@ -349,10 +352,10 @@ int main()
             goto cleanup;
         }
     }
-    for (uint32_t index = 0u; index < 4u; ++index) {
+    for (uint32_t index = 0u; index < 5u; ++index) {
         const VkFormat formats[] = {colorFormat, VK_FORMAT_R32_SFLOAT,
-                                    motionFormat, colorFormat};
-        const uint32_t sizes[] = {128u, 64u, 64u, 128u};
+                                    motionFormat, colorFormat, VK_FORMAT_R16G16_SFLOAT};
+        const uint32_t sizes[] = {128u, 64u, 64u, 128u, 128u};
         if (!expect(create_image(physical, device, sizes[index], sizes[index], formats[index], &images[index]),
                     "create public API image"))
             goto cleanup;
@@ -393,7 +396,7 @@ int main()
                     "begin reset frame") ||
             !expect(record_frame(context, commands, images, colorFormat, motionFormat,
                                  transferFunction, maxLuminance,
-                                 1u, true, true), "record reset frame") ||
+                                 1u, true, true, false), "record reset frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end reset frame"))
             goto cleanup;
         vkGetDeviceQueue(device, family, 0u, &queue);
@@ -405,7 +408,7 @@ int main()
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS, "begin temporal frame") ||
             !expect(record_frame(context, commands, images, colorFormat, motionFormat,
                                  transferFunction, maxLuminance,
-                                 2u, false, false), "record temporal frame") ||
+                                 2u, false, false, true), "record temporal frame with distortion field") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end temporal frame") ||
             !expect(vkQueueSubmit(queue, 1u, &submit, VK_NULL_HANDLE) == VK_SUCCESS &&
                     vkQueueWaitIdle(queue) == VK_SUCCESS, "submit temporal frame") ||
@@ -415,7 +418,7 @@ int main()
     }
     if (!expect(validation.errors == 0u, "Vulkan validation errors"))
         goto cleanup;
-    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (%s color, %s motion, %s; validation warnings=%u)\n",
+    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (external distortion field; %s color, %s motion, %s; validation warnings=%u)\n",
                 colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RGBA8",
                 motionFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RG16F",
                 transferFunction == FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ? "scRGB" : "sRGB",

@@ -250,6 +250,10 @@ typedef struct FfxVkFsr3_3_1_6FrameGenerationDispatchInfo {
     VkCommandBuffer commandBuffer;
     FfxVkFsr3_3_1_6FrameGenerationImage color;
     FfxVkFsr3_3_1_6FrameGenerationImage output;
+    /* Optional R16G16_SFLOAT field containing UV_after - UV_before.  Leave
+     * image null when post-processing did not introduce lens/distortion
+     * displacement; the SDK then uses its neutral internal 1x1 field. */
+    FfxVkFsr3_3_1_6FrameGenerationImage distortionField;
     uint32_t displayWidth;
     uint32_t displayHeight;
     uint32_t interpolationX;

@@ -64,7 +64,9 @@ fence signals; monotonic frame IDs permit multiple queue-ordered frames while
 it releases their temporary image views safely. RGBA8 and RGBA16F colour
 images are both supported and validation-smoked. This target
 records compute work but intentionally does not own a swapchain or pacing
-policy.
+policy. `RecordDispatch` also accepts an optional sampled `R16G16_SFLOAT`
+distortion field containing `UV_after - UV_before` for lens/post-process
+distortion; leave it null for the provider's neutral internal field.
 
 It also creates `ffx-vulkan::fsr4-v07-assets`, a dependency-free C host helper
 for the source-v07 INT8 asset contract. Given a fixed model or DRS preset and
