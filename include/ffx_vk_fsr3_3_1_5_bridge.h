@@ -192,6 +192,14 @@ typedef enum FfxVkFsr3_3_1_6FrameGenerationResult {
     FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_IN_FLIGHT = -4,
 } FfxVkFsr3_3_1_6FrameGenerationResult;
 
+/* Matches the public SDK FfxApiBackbufferTransferFunction values without
+ * exposing its unversioned headers through this reusable Vulkan ABI. */
+typedef enum FfxVkFsr3_3_1_6FrameGenerationTransferFunction {
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB = 0,
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_PQ = 1,
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB = 2,
+} FfxVkFsr3_3_1_6FrameGenerationTransferFunction;
+
 typedef struct FfxVkFsr3_3_1_6FrameGenerationImage {
     VkImage image;
     VkFormat format;
@@ -223,6 +231,9 @@ typedef struct FfxVkFsr3_3_1_6FrameGenerationPrepareInfo {
     float motionVectorScaleX;
     float motionVectorScaleY;
     float frameTimeMilliseconds;
+    float minLuminance;
+    float maxLuminance;
+    FfxVkFsr3_3_1_6FrameGenerationTransferFunction transferFunction;
     float cameraNear;
     float cameraFar;
     float viewSpaceToMeters;
@@ -252,6 +263,7 @@ typedef struct FfxVkFsr3_3_1_6FrameGenerationDispatchInfo {
     float cameraVerticalFovRadians;
     float minLuminance;
     float maxLuminance;
+    FfxVkFsr3_3_1_6FrameGenerationTransferFunction transferFunction;
     uint64_t frameId;
     VkBool32 reset;
 } FfxVkFsr3_3_1_6FrameGenerationDispatchInfo;

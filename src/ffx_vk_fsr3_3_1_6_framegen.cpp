@@ -384,6 +384,9 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
         info->commandBuffer == VK_NULL_HANDLE || info->renderWidth == 0u || info->renderHeight == 0u ||
         info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
         info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
+        info->minLuminance < 0.0f || info->maxLuminance < info->minLuminance ||
+        info->transferFunction < FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB ||
+        info->transferFunction > FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ||
         !valid_image(info->color, context->colorFormat, 1u, 1u, false) ||
         !valid_image(info->depth, VK_FORMAT_R32_SFLOAT, info->renderWidth, info->renderHeight, false) ||
         !valid_motion_image(info->motionVectors, info->renderWidth, info->renderHeight))
@@ -426,8 +429,8 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
     flow.opticalFlowVector = context->opticalFlowVector.resource;
     flow.opticalFlowSCD = context->opticalFlowScd.resource;
     flow.reset = info->reset == VK_TRUE;
-    flow.backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
-    flow.minMaxLuminance = {0.0f, 1.0f};
+    flow.backbufferTransferFunction = static_cast<int>(info->transferFunction);
+    flow.minMaxLuminance = {info->minLuminance, info->maxLuminance};
     FfxErrorCode result = ffxOpticalflowContextDispatch(&context->opticalFlow, &flow);
     FfxFrameInterpolationPrepareDescription prepare{};
     if (result == FFX_OK) {
@@ -467,6 +470,9 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
         info->displayWidth == 0u || info->displayHeight == 0u ||
         info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
         info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
+        info->minLuminance < 0.0f || info->maxLuminance < info->minLuminance ||
+        info->transferFunction < FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB ||
+        info->transferFunction > FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ||
         !valid_image(info->color, context->colorFormat, info->displayWidth, info->displayHeight, false) ||
         !valid_image(info->output, context->colorFormat, info->displayWidth, info->displayHeight, true))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
@@ -503,7 +509,7 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
     dispatch.cameraFar = info->cameraFar;
     dispatch.cameraFovAngleVertical = info->cameraVerticalFovRadians;
     dispatch.viewSpaceToMetersFactor = info->viewSpaceToMeters;
-    dispatch.backBufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+    dispatch.backBufferTransferFunction = static_cast<FfxApiBackbufferTransferFunction>(info->transferFunction);
     dispatch.minMaxLuminance[0] = info->minLuminance;
     dispatch.minMaxLuminance[1] = info->maxLuminance;
     dispatch.frameID = info->frameId;

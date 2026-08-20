@@ -180,6 +180,8 @@ bool initialize_images(VkCommandBuffer commandBuffer, const Image* images, uint3
 
 bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffer commandBuffer,
                   const Image* images, VkFormat colorFormat, VkFormat motionFormat,
+                  FfxVkFsr3_3_1_6FrameGenerationTransferFunction transferFunction,
+                  float maxLuminance,
                   uint64_t frameId, bool reset, bool initialize)
 {
     if (initialize)
@@ -197,6 +199,9 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     prepare.motionVectorScaleX = 64.0f;
     prepare.motionVectorScaleY = 64.0f;
     prepare.frameTimeMilliseconds = 16.6667f;
+    prepare.minLuminance = 0.0f;
+    prepare.maxLuminance = maxLuminance;
+    prepare.transferFunction = transferFunction;
     prepare.cameraNear = 0.1f;
     prepare.cameraFar = 1000.0f;
     prepare.viewSpaceToMeters = 1.0f;
@@ -223,7 +228,8 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     dispatch.cameraFar = prepare.cameraFar;
     dispatch.viewSpaceToMeters = prepare.viewSpaceToMeters;
     dispatch.cameraVerticalFovRadians = prepare.cameraVerticalFovRadians;
-    dispatch.maxLuminance = 1.0f;
+    dispatch.maxLuminance = maxLuminance;
+    dispatch.transferFunction = transferFunction;
     dispatch.frameId = frameId;
     dispatch.reset = reset ? VK_TRUE : VK_FALSE;
     return ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &dispatch) ==
@@ -243,6 +249,15 @@ int main()
     const VkFormat motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 #else
     const VkFormat motionFormat = VK_FORMAT_R16G16_SFLOAT;
+#endif
+#if defined(FSR316_SMOKE_SCRGB)
+    const FfxVkFsr3_3_1_6FrameGenerationTransferFunction transferFunction =
+        FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB;
+    const float maxLuminance = 1000.0f;
+#else
+    const FfxVkFsr3_3_1_6FrameGenerationTransferFunction transferFunction =
+        FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB;
+    const float maxLuminance = 1.0f;
 #endif
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
@@ -377,6 +392,7 @@ int main()
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS,
                     "begin reset frame") ||
             !expect(record_frame(context, commands, images, colorFormat, motionFormat,
+                                 transferFunction, maxLuminance,
                                  1u, true, true), "record reset frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end reset frame"))
             goto cleanup;
@@ -388,6 +404,7 @@ int main()
             !expect(vkResetCommandPool(device, pool, 0u) == VK_SUCCESS, "reset temporal pool") ||
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS, "begin temporal frame") ||
             !expect(record_frame(context, commands, images, colorFormat, motionFormat,
+                                 transferFunction, maxLuminance,
                                  2u, false, false), "record temporal frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end temporal frame") ||
             !expect(vkQueueSubmit(queue, 1u, &submit, VK_NULL_HANDLE) == VK_SUCCESS &&
@@ -398,9 +415,10 @@ int main()
     }
     if (!expect(validation.errors == 0u, "Vulkan validation errors"))
         goto cleanup;
-    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (%s color, %s motion; validation warnings=%u)\n",
+    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (%s color, %s motion, %s; validation warnings=%u)\n",
                 colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RGBA8",
                 motionFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RG16F",
+                transferFunction == FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ? "scRGB" : "sRGB",
                 validation.warnings);
     result = validation.warnings ? 1 : 0;
 

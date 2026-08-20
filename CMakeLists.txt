@@ -666,6 +666,21 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
             COMMAND ffx_vk_fsr3_3_1_6_framegen_q2rtx_motion_api_smoke)
         set_tests_properties(ffx_vk_fsr3_3_1_6_framegen_q2rtx_motion_api_smoke PROPERTIES
             RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+
+        add_executable(ffx_vk_fsr3_3_1_6_framegen_scrgb_api_smoke
+            tests/fsr3_3_1_6_framegen_api_smoke.cpp)
+        set_target_properties(ffx_vk_fsr3_3_1_6_framegen_scrgb_api_smoke PROPERTIES
+            CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        target_compile_definitions(ffx_vk_fsr3_3_1_6_framegen_scrgb_api_smoke PRIVATE
+            FSR316_SMOKE_FLOAT16=1
+            FSR316_SMOKE_MOTION_RGBA16F=1
+            FSR316_SMOKE_SCRGB=1)
+        target_link_libraries(ffx_vk_fsr3_3_1_6_framegen_scrgb_api_smoke PRIVATE
+            ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_scrgb_api_smoke
+            COMMAND ffx_vk_fsr3_3_1_6_framegen_scrgb_api_smoke)
+        set_tests_properties(ffx_vk_fsr3_3_1_6_framegen_scrgb_api_smoke PROPERTIES
+            RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
     endif()
 
     add_executable(ffx_vk_contract_test tests/contract_test.c)
