@@ -29,6 +29,13 @@ int main(void)
     int foundColor = 0;
     int foundDepth = 0;
     int foundCb = 0;
+    const char fiPath[] = FSR3_316_FRAMEGEN_SPV_DIR "/fsr3_3_1_6_fi_ffx_frameinterpolation_setup.spv";
+    FILE* fiFile;
+    long fiBytes;
+    uint32_t* fiWords;
+    uint32_t fiCount = 16u;
+    FfxVkFsr3_3_1_5DescriptorBinding fiBindings[16];
+    int foundCounterUav = 0;
 
     if (!file) {
         fprintf(stderr, "cannot open generated module: %s\n", path);
@@ -80,9 +87,42 @@ int main(void)
         foundCb |= strcmp(bindings[index].name, "cbFSR3Upscaler") == 0 &&
                    bindings[index].descriptorClass == FFX_VK_FSR3_3_1_5_DESCRIPTOR_CONSTANT_BUFFER;
     }
-    free(words);
     if (!foundColor || !foundDepth || !foundCb)
+        goto fail;
+    free(words);
+    words = NULL;
+
+    fiFile = fopen(fiPath, "rb");
+    if (!fiFile || fseek(fiFile, 0, SEEK_END) != 0 || (fiBytes = ftell(fiFile)) <= 0 ||
+        fiBytes % (long)sizeof(uint32_t) != 0 || fseek(fiFile, 0, SEEK_SET) != 0) {
+        if (fiFile)
+            fclose(fiFile);
+        return 1;
+    }
+    fiWords = malloc((size_t)fiBytes);
+    if (!fiWords || fread(fiWords, 1u, (size_t)fiBytes, fiFile) != (size_t)fiBytes) {
+        free(fiWords);
+        fclose(fiFile);
+        return 1;
+    }
+    fclose(fiFile);
+    if (ffxVkFsr3_3_1_5ReflectSpirv(fiWords, (size_t)fiBytes / sizeof(*fiWords),
+                                     fiBindings, &fiCount) != FFX_VK_PORTABLE_OK) {
+        free(fiWords);
+        return 1;
+    }
+    for (uint32_t index = 0; index < fiCount; ++index) {
+        foundCounterUav |= strcmp(fiBindings[index].name, "rw_counters") == 0 &&
+                           fiBindings[index].descriptorClass ==
+                               FFX_VK_FSR3_3_1_5_DESCRIPTOR_BUFFER_UAV;
+    }
+    free(fiWords);
+    if (!foundCounterUav)
         return 1;
     puts("FSR3.1.5 SPIR-V reflection test passed");
     return 0;
+
+fail:
+    free(words);
+    return 1;
 }

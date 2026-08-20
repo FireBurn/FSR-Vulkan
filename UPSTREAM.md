@@ -247,9 +247,11 @@ next gap: these modules use `rw_counters`/`r_counters` storage-buffer bindings
 and declare storage-image read/write-without-format capabilities. Commit
 `1c51d094` binds those known counter resources through reflected bridge
 metadata, the SDK buffer tables, Vulkan storage-buffer descriptors, and
-compute-job recording. Its current name-based `counters` classifier is a
-measured compatibility step, not a substitute for arbitrary SPIR-V type
-reflection. The RX 6800M bridge test now queries and enables the two required
+compute-job recording. The follow-up reflector parses SPIR-V variables,
+pointer storage classes, and image declarations rather than inferring the
+descriptor type from a resource name. Only the SDK `r_`/`rw_` convention
+selects StorageBuffer direction because Vulkan uses one descriptor type for
+both. The RX 6800M bridge test now queries and enables the two required
 storage-image-without-format feature bits only when both are supported, then
 creates FI and OF contexts and submits their initialization jobs with no Vulkan
 validation warning or error. This establishes the context-creation seam only;

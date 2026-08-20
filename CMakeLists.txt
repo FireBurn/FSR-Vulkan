@@ -543,7 +543,8 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         add_executable(ffx_vk_fsr3_3_1_5_reflection_test
             tests/fsr3_3_1_5_reflection_test.c)
         target_compile_definitions(ffx_vk_fsr3_3_1_5_reflection_test PRIVATE
-            FSR3_315_SPV_DIR="${FFX_2_3_0_GENERATED_FSR3UPSCALER}")
+            FSR3_315_SPV_DIR="${FFX_2_3_0_GENERATED_FSR3UPSCALER}"
+            FSR3_316_FRAMEGEN_SPV_DIR="${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}")
         target_link_libraries(ffx_vk_fsr3_3_1_5_reflection_test PRIVATE
             ffx-vulkan::portable)
         add_test(NAME ffx_vk_fsr3_3_1_5_reflection_test
