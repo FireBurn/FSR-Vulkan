@@ -179,7 +179,7 @@ bool initialize_images(VkCommandBuffer commandBuffer, const Image* images, uint3
 }
 
 bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffer commandBuffer,
-                  const Image* images, VkFormat colorFormat,
+                  const Image* images, VkFormat colorFormat, VkFormat motionFormat,
                   uint64_t frameId, bool reset, bool initialize)
 {
     if (initialize)
@@ -190,7 +190,7 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     prepare.depth = image_info(images[1], VK_FORMAT_R32_SFLOAT, 64u, 64u,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    prepare.motionVectors = image_info(images[2], VK_FORMAT_R16G16_SFLOAT, 64u, 64u,
+    prepare.motionVectors = image_info(images[2], motionFormat, 64u, 64u,
                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     prepare.renderWidth = 64u;
     prepare.renderHeight = 64u;
@@ -238,6 +238,11 @@ int main()
     const VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 #else
     const VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+#endif
+#if defined(FSR316_SMOKE_MOTION_RGBA16F)
+    const VkFormat motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+#else
+    const VkFormat motionFormat = VK_FORMAT_R16G16_SFLOAT;
 #endif
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
@@ -331,7 +336,7 @@ int main()
     }
     for (uint32_t index = 0u; index < 4u; ++index) {
         const VkFormat formats[] = {colorFormat, VK_FORMAT_R32_SFLOAT,
-                                    VK_FORMAT_R16G16_SFLOAT, colorFormat};
+                                    motionFormat, colorFormat};
         const uint32_t sizes[] = {128u, 64u, 64u, 128u};
         if (!expect(create_image(physical, device, sizes[index], sizes[index], formats[index], &images[index]),
                     "create public API image"))
@@ -371,7 +376,8 @@ int main()
                     "allocate public API command buffer") ||
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS,
                     "begin reset frame") ||
-            !expect(record_frame(context, commands, images, colorFormat, 1u, true, true), "record reset frame") ||
+            !expect(record_frame(context, commands, images, colorFormat, motionFormat,
+                                 1u, true, true), "record reset frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end reset frame"))
             goto cleanup;
         vkGetDeviceQueue(device, family, 0u, &queue);
@@ -381,7 +387,8 @@ int main()
                     vkQueueWaitIdle(queue) == VK_SUCCESS, "submit reset frame") ||
             !expect(vkResetCommandPool(device, pool, 0u) == VK_SUCCESS, "reset temporal pool") ||
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS, "begin temporal frame") ||
-            !expect(record_frame(context, commands, images, colorFormat, 2u, false, false), "record temporal frame") ||
+            !expect(record_frame(context, commands, images, colorFormat, motionFormat,
+                                 2u, false, false), "record temporal frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end temporal frame") ||
             !expect(vkQueueSubmit(queue, 1u, &submit, VK_NULL_HANDLE) == VK_SUCCESS &&
                     vkQueueWaitIdle(queue) == VK_SUCCESS, "submit temporal frame") ||
@@ -391,8 +398,10 @@ int main()
     }
     if (!expect(validation.errors == 0u, "Vulkan validation errors"))
         goto cleanup;
-    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (%s; validation warnings=%u)\n",
-                colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RGBA8", validation.warnings);
+    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (%s color, %s motion; validation warnings=%u)\n",
+                colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RGBA8",
+                motionFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RG16F",
+                validation.warnings);
     result = validation.warnings ? 1 : 0;
 
 cleanup:
