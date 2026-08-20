@@ -226,10 +226,13 @@ permutation; their dedicated test verifies all returned blobs are SPIR-V and
 checks both error and Wave64-query paths. A separate host-graph test links the
 real 3.1.6 FI/OF schedulers with the public SDK core and proves context
 creation allocates 42 persistent resources and creates all 18 embedded-SPIR-V
-pipelines (11 FI plus 7 OF), then releases them cleanly. This is still not a
-Vulkan scheduler/backend bridge or portable presenter. Those are the next
-independent implementation and validation milestones; do not replace them
-with a dummy scheduler merely to make this target link.
+pipelines (11 FI plus 7 OF), then releases them cleanly. It also records the
+real reset Optical-Flow → FI Prepare → FI Dispatch graph against a strict mock:
+15 dynamic resource registrations, 12 staged constant buffers, and 30 final
+FI GPU jobs. This is still not a Vulkan scheduler/backend bridge or portable
+presenter. Those are the next independent implementation and validation
+milestones; do not replace them with a dummy scheduler merely to make this
+target link.
 
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally
