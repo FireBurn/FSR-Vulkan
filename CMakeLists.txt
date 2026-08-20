@@ -248,6 +248,43 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
             -Wall -Wextra -Wpedantic)
     endif()
 
+    # FI/OF use the same public SDK core helpers as the upscaler but must not
+    # pull the upscaler scheduler itself into their host-graph executable: it
+    # would require its independent shader-blob callback.  Keep a small core
+    # object set for the FI/OF scheduler gate.  It deliberately has the same
+    # private helper namespace and is only ever linked into a separate test or
+    # a future 3.1.6 backend target.
+    add_library(ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold OBJECT
+        "${FFX_2_3_0_ROOT}/api/internal/ffx_assert.cpp"
+        "${FFX_2_3_0_ROOT}/api/internal/ffx_message.cpp"
+        "${FFX_2_3_0_ROOT}/api/internal/ffx_object_management.cpp"
+    )
+    set_target_properties(ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+    target_compile_definitions(ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold PRIVATE
+        FFX_VK_PORTABLE_NO_WATERMARK=1
+        ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS}
+    )
+    target_include_directories(ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold PRIVATE
+        "${FFX_2_3_0_ROOT}/api/include"
+        "${FFX_2_3_0_ROOT}/api/internal"
+        "${FFX_2_3_0_ROOT}/upscalers/include"
+        "${FFX_2_3_0_ROOT}/upscalers/fsr3/include"
+        "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal"
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/include"
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal"
+    )
+    if(MSVC)
+        target_compile_options(ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold PRIVATE /W4)
+    else()
+        target_compile_options(ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold PRIVATE
+            -include "${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_1_1_4_portability.hpp"
+            -Wall -Wextra -Wpedantic)
+    endif()
+
     # Keep the newer FI/OF source port separate from the linked upscaler
     # scaffold.  Both source files deliberately refer to their own generated
     # shader-blob accessors, which must not be faked merely to make the
@@ -408,6 +445,38 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         endif()
         add_test(NAME ffx_vk_fsr3_3_1_6_framegen_blob_test
             COMMAND ffx_vk_fsr3_3_1_6_framegen_blob_test)
+
+        add_executable(ffx_vk_fsr3_3_1_6_framegen_host_graph_test
+            tests/fsr3_3_1_6_framegen_host_graph_test.cpp
+            $<TARGET_OBJECTS:ffx_vulkan_fsr3_framegen_3_1_6_scaffold>
+            $<TARGET_OBJECTS:ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold>)
+        set_target_properties(ffx_vk_fsr3_3_1_6_framegen_host_graph_test PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(ffx_vk_fsr3_3_1_6_framegen_host_graph_test PRIVATE
+            FFX_VK_PORTABLE_NO_WATERMARK=1
+            ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})
+        target_include_directories(ffx_vk_fsr3_3_1_6_framegen_host_graph_test PRIVATE
+            "${FFX_2_3_0_ROOT}/api/include"
+            "${FFX_2_3_0_ROOT}/api/internal"
+            "${FFX_2_3_0_ROOT}/upscalers/include"
+            "${FFX_2_3_0_ROOT}/upscalers/fsr3/include"
+            "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/include"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal"
+            "${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}"
+        )
+        if(MSVC)
+            target_compile_options(ffx_vk_fsr3_3_1_6_framegen_host_graph_test PRIVATE /W4)
+        else()
+            target_compile_options(ffx_vk_fsr3_3_1_6_framegen_host_graph_test PRIVATE
+                -include "${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_1_1_4_portability.hpp"
+                -Wall -Wextra -Wpedantic)
+        endif()
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_host_graph_test
+            COMMAND ffx_vk_fsr3_3_1_6_framegen_host_graph_test)
 
         add_test(NAME ffx_vk_fsr3_3_1_5_generated_hashes
             COMMAND "${CMAKE_COMMAND}"
