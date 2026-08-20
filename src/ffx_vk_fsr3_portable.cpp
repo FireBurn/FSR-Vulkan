@@ -428,6 +428,11 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
         return capabilityResult;
     if (!capabilities.fsr3ComputePrerequisites)
         return FFX_VK_PORTABLE_ERROR_UNSUPPORTED;
+    /* The capability query reports physical support. The generated FSR3
+     * accumulate shaders additionally require this feature on the actual
+     * logical device, which Vulkan cannot query after device creation. */
+    if (deviceInfo->shaderStorageImageWriteWithoutFormatEnabled != VK_TRUE)
+        return FFX_VK_PORTABLE_ERROR_UNSUPPORTED;
 
     FfxVkPortableUpscaleContext* result = new (std::nothrow) FfxVkPortableUpscaleContext;
     if (result == nullptr)

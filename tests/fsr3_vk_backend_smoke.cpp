@@ -1164,6 +1164,8 @@ int main()
     const VkBool32 enabledShaderFloat16 = features12.shaderFloat16;
     const VkBool32 enabledStorageBufferNonUniformIndexing =
         features12.shaderStorageBufferArrayNonUniformIndexing;
+    const VkBool32 enabledStorageImageWriteWithoutFormat =
+        features.features.shaderStorageImageWriteWithoutFormat;
     // Match Q2's device: promoted optional features can be physically
     // supported while absent from the logical-device feature chain.
     features13.subgroupSizeControl = VK_FALSE;
@@ -1320,6 +1322,8 @@ int main()
     portableDevice.shaderFloat16Enabled = enabledShaderFloat16;
     portableDevice.shaderStorageBufferArrayNonUniformIndexingEnabled =
         enabledStorageBufferNonUniformIndexing;
+    portableDevice.shaderStorageImageWriteWithoutFormatEnabled =
+        enabledStorageImageWriteWithoutFormat;
     FfxVkPortableUpscaleCreateInfo portableDescription{};
     portableDescription.structSize = sizeof(portableDescription);
     portableDescription.flags = FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
@@ -1327,6 +1331,21 @@ int main()
                                 FFX_VK_PORTABLE_CONTEXT_DEBUG_CHECKING;
     portableDescription.maxRenderSize = {64, 64};
     portableDescription.maxOutputSize = {128, 128};
+
+    /* Physical support is not enough: the owner must explicitly carry this
+     * feature into VkDeviceCreateInfo. The wrapper must reject an otherwise
+     * valid device contract that says it did not. */
+    FfxVkPortableDeviceInfo missingStorageWriteFeature = portableDevice;
+    missingStorageWriteFeature.shaderStorageImageWriteWithoutFormatEnabled = VK_FALSE;
+    FfxVkPortableUpscaleContext* rejectedPortableContext =
+        reinterpret_cast<FfxVkPortableUpscaleContext*>(static_cast<uintptr_t>(1));
+    const FfxVkPortableResult missingStorageWriteFeatureResult =
+        ffxVkPortableUpscaleContextCreate(&missingStorageWriteFeature,
+                                          &portableDescription,
+                                          &rejectedPortableContext);
+    const bool missingStorageWriteFeatureRejected =
+        missingStorageWriteFeatureResult == FFX_VK_PORTABLE_ERROR_UNSUPPORTED &&
+        rejectedPortableContext == nullptr;
 
     FfxVkPortableUpscaleContext* portableContext = nullptr;
     const FfxVkPortableResult portableCreateResult = ffxVkPortableUpscaleContextCreate(
@@ -1437,6 +1456,7 @@ int main()
                 validation.errors.load());
     if (!creationComplete || !dispatchComplete || !destroyComplete ||
         !disabledOptionalCapabilitiesSuppressed ||
+        !missingStorageWriteFeatureRejected ||
         portableCreateResult != FFX_VK_PORTABLE_OK || !portableFirstDispatchComplete ||
         !portableSecondDispatchComplete ||
         portableDestroyResult != FFX_VK_PORTABLE_OK ||

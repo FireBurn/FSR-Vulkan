@@ -120,6 +120,8 @@ FfxVkPortableDeviceInfo device_info = {
     .shaderStorageBufferArrayNonUniformIndexingEnabled =
         storage_buffer_nonuniform_indexing_was_enabled,
     .accelerationStructureEnabled = acceleration_structure_was_enabled,
+    .shaderStorageImageWriteWithoutFormatEnabled =
+        storage_image_write_without_format_was_enabled,
 };
 FfxVkPortableUpscaleCreateInfo create_info = {
     .structSize = sizeof(create_info),
@@ -153,6 +155,10 @@ omits optional debug/Breadcrumbs commands. In particular,
 `subgroupSizeControlEnabled` controls required-subgroup-size pipeline metadata;
 `computeFullSubgroupsEnabled` records the related feature for future effects
 but the current upscaler does not request full-subgroup pipeline semantics.
+The public FSR3 upscaler additionally requires
+`shaderStorageImageWriteWithoutFormatEnabled = VK_TRUE`; its checked
+accumulate modules declare that Vulkan feature, so physical-device support
+without logical-device enablement is rejected at context creation.
 
 Creation and destruction do not submit work. The context owns the backend,
 scratch storage, temporal images, and FSR3's three shared upscaler outputs. It

@@ -141,6 +141,10 @@ typedef struct FfxVkPortableDeviceInfo {
     VkBool32 debugUtilsEnabled;
     VkBool32 shaderStorageBufferArrayNonUniformIndexingEnabled;
     VkBool32 accelerationStructureEnabled;
+    /* Required by the checked FSR3 accumulate shaders. Physical-device
+     * support is insufficient: this must have been enabled in the owner's
+     * VkPhysicalDeviceFeatures chain when creating the logical device. */
+    VkBool32 shaderStorageImageWriteWithoutFormatEnabled;
 } FfxVkPortableDeviceInfo;
 
 typedef struct FfxVkPortableUpscaleCreateInfo {
