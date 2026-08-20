@@ -501,7 +501,11 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
     dispatch.opticalFlowSceneChangeDetection = context->opticalFlowScd.resource;
     dispatch.opticalFlowBufferSize = {context->opticalFlowVector.resource.description.width,
                                       context->opticalFlowVector.resource.description.height};
-    dispatch.opticalFlowScale = {1.0f, 1.0f};
+    /* The public provider normalizes the optical-flow field by the display
+     * dimensions.  The FI shaders recover the field extent from this scale;
+     * passing 1.0 here collapses that calculation and produces black frames. */
+    dispatch.opticalFlowScale = {1.0f / static_cast<float>(info->displayWidth),
+                                 1.0f / static_cast<float>(info->displayHeight)};
     dispatch.opticalFlowBlockSize = 8u;
     dispatch.frameTimeDelta = info->frameTimeMilliseconds;
     dispatch.reset = info->reset == VK_TRUE;
