@@ -240,6 +240,8 @@ The existing SDK-2.3 Vulkan resource/job bridge now accepts a valid SPIR-V
 That keeps allocation, import, barrier, descriptor, and job-recording code
 reusable for public effects whose scheduler supplies Vulkan blobs (including
 the fixed 3.1.6 FI/OF profile), while preserving the working 3.1.5 fallback.
+The RX 6800M bridge test passes an FI blob with an intentionally empty pipeline
+name, proving this direct-SPIR-V route is selected rather than the fallback.
 
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally

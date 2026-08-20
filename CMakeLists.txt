@@ -576,7 +576,8 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
             "${FFX_2_3_0_ROOT}/api/internal"
             "${FFX_2_3_0_ROOT}/upscalers/include"
             "${FFX_2_3_0_ROOT}/upscalers/fsr3/include"
-            "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal")
+            "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal"
+            "${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}")
         target_compile_definitions(ffx_vk_fsr3_3_1_5_bridge_test PRIVATE
             ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})
         target_link_libraries(ffx_vk_fsr3_3_1_5_bridge_test PRIVATE

@@ -7,6 +7,7 @@
 
 #include "ffx_interface.h"
 #include "ffx_fsr3upscaler.h"
+#include "ffx_vk_fsr3_3_1_6_framegen_embedded_spirv.h"
 
 #include <cwchar>
 #include <atomic>
@@ -763,6 +764,27 @@ int main()
                 goto cleanup;
             }
             cleanupPortable();
+        }
+        {
+            /* A direct Vulkan scheduler blob must take precedence over the
+             * legacy upscaler name catalogue.  Deliberately leave the name
+             * empty: success proves the generic SPIR-V path was selected. */
+            const auto& module = FFX_VK_FSR3_3_1_6_FRAMEGEN_EMBEDDED_SPIRV[0];
+            FfxShaderBlob shaderBlob{};
+            shaderBlob.data = reinterpret_cast<const uint8_t*>(module.words);
+            shaderBlob.size = static_cast<uint32_t>(module.wordCount * sizeof(uint32_t));
+            shaderBlob.entryName = "CS";
+            FfxPipelineDescription description{};
+            FfxPipelineState pipeline{};
+            if (!expect(ffxVkFsr3_3_1_5BridgeCreatePipeline(
+                            &backend, &shaderBlob, &description, 1u, &pipeline) == FFX_OK,
+                        "create direct-SPIR-V SDK callback pipeline") ||
+                !expect(pipeline.pipeline != nullptr, "direct-SPIR-V pipeline handle")) {
+                ffxVkFsr3_3_1_5BridgeDestroyPipeline(&backend, &pipeline, 1u);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            ffxVkFsr3_3_1_5BridgeDestroyPipeline(&backend, &pipeline, 1u);
         }
         for (const wchar_t* name : kPipelineNames) {
             FfxPipelineDescription description{};
