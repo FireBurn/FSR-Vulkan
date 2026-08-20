@@ -15,6 +15,7 @@
 
 #include "ffx_interface.h"
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -36,7 +37,10 @@ struct BridgeResource {
      * Newly-created optimal images start undefined even when the host's first
      * requested state is COMPUTE_READ or UNORDERED_ACCESS. */
     VkImageLayout imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageLayout restoreLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    FfxApiResourceState restoreState = FFX_API_RESOURCE_STATE_COMMON;
     bool owned = true;
+    bool imported = false;
 };
 
 struct BridgeConstantBuffer {
@@ -64,6 +68,7 @@ struct FfxVkFsr3_3_1_5Bridge {
      * conservative and makes this first native graph recorder GPU-safe. */
     std::vector<std::unique_ptr<BridgeDescriptorSet>> descriptorSets;
     std::vector<FfxGpuJobDescription> jobs;
+    std::vector<int32_t> registeredImportedResources;
 
     FfxVkFsr3_3_1_5Bridge(VkPhysicalDevice inPhysicalDevice,
                            VkDevice inDevice,
@@ -119,6 +124,33 @@ static VkFormat to_vk_format(uint32_t format)
     }
 }
 
+static FfxApiSurfaceFormat from_vk_format(VkFormat format)
+{
+    switch (format) {
+    case VK_FORMAT_R32G32B32A32_SFLOAT: return FFX_API_SURFACE_FORMAT_R32G32B32A32_FLOAT;
+    case VK_FORMAT_R32G32B32A32_UINT: return FFX_API_SURFACE_FORMAT_R32G32B32A32_UINT;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+    case VK_FORMAT_R32G32_SFLOAT: return FFX_API_SURFACE_FORMAT_R32G32_FLOAT;
+    case VK_FORMAT_R32G32_UINT: return FFX_API_SURFACE_FORMAT_R32G32_UINT;
+    case VK_FORMAT_R16G16_SFLOAT: return FFX_API_SURFACE_FORMAT_R16G16_FLOAT;
+    case VK_FORMAT_R16G16_UINT: return FFX_API_SURFACE_FORMAT_R16G16_UINT;
+    case VK_FORMAT_R16G16_SINT: return FFX_API_SURFACE_FORMAT_R16G16_SINT;
+    case VK_FORMAT_R16_SFLOAT: return FFX_API_SURFACE_FORMAT_R16_FLOAT;
+    case VK_FORMAT_R16_UINT: return FFX_API_SURFACE_FORMAT_R16_UINT;
+    case VK_FORMAT_R16_UNORM: return FFX_API_SURFACE_FORMAT_R16_UNORM;
+    case VK_FORMAT_R16_SNORM: return FFX_API_SURFACE_FORMAT_R16_SNORM;
+    case VK_FORMAT_R8_UNORM: return FFX_API_SURFACE_FORMAT_R8_UNORM;
+    case VK_FORMAT_R8_SNORM: return FFX_API_SURFACE_FORMAT_R8_SNORM;
+    case VK_FORMAT_R8_UINT: return FFX_API_SURFACE_FORMAT_R8_UINT;
+    case VK_FORMAT_R8G8_UNORM: return FFX_API_SURFACE_FORMAT_R8G8_UNORM;
+    case VK_FORMAT_R8G8_UINT: return FFX_API_SURFACE_FORMAT_R8G8_UINT;
+    case VK_FORMAT_R32_SFLOAT: return FFX_API_SURFACE_FORMAT_R32_FLOAT;
+    case VK_FORMAT_R32_UINT: return FFX_API_SURFACE_FORMAT_R32_UINT;
+    case VK_FORMAT_R8G8B8A8_UNORM: return FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
+    default: return FFX_API_SURFACE_FORMAT_UNKNOWN;
+    }
+}
+
 extern "C" FfxVersionNumber ffxVkFsr3_3_1_5BridgeGetSDKVersion(FfxInterface*)
 {
     return FFX_SDK_MAKE_VERSION(2, 3, 0);
@@ -150,7 +182,7 @@ static uint32_t find_memory_type(VkPhysicalDevice physicalDevice, uint32_t typeB
 
 static void destroy_resource(FfxVkFsr3_3_1_5Bridge* bridge, BridgeResource* resource)
 {
-    if (!bridge || !resource || !resource->owned)
+    if (!bridge || !resource)
         return;
     for (VkImageView view : resource->uavViews) {
         if (view != VK_NULL_HANDLE)
@@ -158,12 +190,43 @@ static void destroy_resource(FfxVkFsr3_3_1_5Bridge* bridge, BridgeResource* reso
     }
     if (resource->srvView != VK_NULL_HANDLE)
         vkDestroyImageView(bridge->device, resource->srvView, bridge->allocationCallbacks);
-    if (resource->image != VK_NULL_HANDLE)
-        vkDestroyImage(bridge->device, resource->image, bridge->allocationCallbacks);
-    if (resource->buffer != VK_NULL_HANDLE)
-        vkDestroyBuffer(bridge->device, resource->buffer, bridge->allocationCallbacks);
-    if (resource->memory != VK_NULL_HANDLE)
-        vkFreeMemory(bridge->device, resource->memory, bridge->allocationCallbacks);
+    if (resource->owned) {
+        if (resource->image != VK_NULL_HANDLE)
+            vkDestroyImage(bridge->device, resource->image, bridge->allocationCallbacks);
+        if (resource->buffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(bridge->device, resource->buffer, bridge->allocationCallbacks);
+        if (resource->memory != VK_NULL_HANDLE)
+            vkFreeMemory(bridge->device, resource->memory, bridge->allocationCallbacks);
+    }
+}
+
+static bool create_image_views(FfxVkFsr3_3_1_5Bridge* bridge, BridgeResource* resource)
+{
+    if (!bridge || !resource || resource->image == VK_NULL_HANDLE)
+        return false;
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = resource->image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = to_vk_format(resource->description.format);
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = resource->description.mipCount;
+    viewInfo.subresourceRange.layerCount = resource->description.depth ? resource->description.depth : 1u;
+    if (viewInfo.format == VK_FORMAT_UNDEFINED ||
+        vkCreateImageView(bridge->device, &viewInfo, bridge->allocationCallbacks,
+                          &resource->srvView) != VK_SUCCESS)
+        return false;
+    if (resource->description.usage & FFX_API_RESOURCE_USAGE_UAV) {
+        resource->uavViews.resize(resource->description.mipCount, VK_NULL_HANDLE);
+        for (uint32_t mip = 0; mip < resource->description.mipCount; ++mip) {
+            viewInfo.subresourceRange.baseMipLevel = mip;
+            viewInfo.subresourceRange.levelCount = 1u;
+            if (vkCreateImageView(bridge->device, &viewInfo, bridge->allocationCallbacks,
+                                  &resource->uavViews[mip]) != VK_SUCCESS)
+                return false;
+        }
+    }
+    return true;
 }
 
 static void destroy_constant_buffer(FfxVkFsr3_3_1_5Bridge* bridge,
@@ -503,6 +566,165 @@ extern "C" VkImage ffxVkFsr3_3_1_5BridgeGetNativeImage(
     return resource ? resource->image : VK_NULL_HANDLE;
 }
 
+extern "C" FfxVkFsr3_3_1_5Resource ffxVkFsr3_3_1_5BridgeImportImage(
+    FfxVkFsr3_3_1_5Bridge* bridge,
+    const FfxVkFsr3_3_1_5ImportedImageDescription* description)
+{
+    FfxVkFsr3_3_1_5Resource result{};
+    if (!bridge || !description || description->image == VK_NULL_HANDLE ||
+        description->width == 0u || description->height == 0u ||
+        description->mipCount == 0u || description->arrayLayers == 0u ||
+        description->layout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        (description->usage & VK_IMAGE_USAGE_SAMPLED_BIT) == 0u)
+        return result;
+    const FfxApiSurfaceFormat format = from_vk_format(description->format);
+    if (format == FFX_API_SURFACE_FORMAT_UNKNOWN)
+        return result;
+    std::unique_ptr<BridgeResource> resource(new (std::nothrow) BridgeResource);
+    if (!resource)
+        return result;
+    resource->description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
+    resource->description.format = format;
+    resource->description.width = description->width;
+    resource->description.height = description->height;
+    resource->description.depth = description->arrayLayers;
+    resource->description.mipCount = description->mipCount;
+    resource->description.flags = FFX_API_RESOURCE_FLAGS_NONE;
+    resource->description.usage =
+        (description->usage & VK_IMAGE_USAGE_STORAGE_BIT) ? FFX_API_RESOURCE_USAGE_UAV :
+                                                            FFX_API_RESOURCE_USAGE_READ_ONLY;
+    resource->image = description->image;
+    resource->imageLayout = description->layout;
+    resource->restoreLayout = description->layout;
+    resource->currentState = static_cast<FfxApiResourceState>(description->state);
+    resource->restoreState = resource->currentState;
+    resource->owned = false;
+    resource->imported = true;
+    if (!create_image_views(bridge, resource.get())) {
+        destroy_resource(bridge, resource.get());
+        return result;
+    }
+    const int32_t index = allocate_resource_slot(bridge, std::move(resource));
+    if (index <= 0)
+        return result;
+    BridgeResource* stored = lookup_resource(bridge, index);
+    if (!stored) {
+        FfxResourceInternal failed{index};
+        FfxInterface backend{};
+        backend.device = bridge;
+        ffxVkFsr3_3_1_5BridgeDestroyResource(&backend, failed, 0u);
+        return result;
+    }
+    result.resource = stored;
+    return result;
+}
+
+extern "C" void ffxVkFsr3_3_1_5BridgeReleaseImportedImage(
+    FfxVkFsr3_3_1_5Bridge* bridge, FfxVkFsr3_3_1_5Resource resource)
+{
+    const int32_t index = lookup_resource_index(bridge, resource.resource);
+    if (index == 0)
+        return;
+    FfxResourceInternal internal{index};
+    FfxInterface backend{};
+    backend.device = bridge;
+    ffxVkFsr3_3_1_5BridgeDestroyResource(&backend, internal, 0u);
+}
+
+/* Internal SDK-facing conversion.  Keep it out of the portable header: the
+ * public ABI deliberately exposes only an opaque resource token. */
+extern "C" FfxApiResource ffxVkFsr3_3_1_5BridgeResolveResource(
+    FfxVkFsr3_3_1_5Bridge* bridge, FfxVkFsr3_3_1_5Resource resourceToken)
+{
+    FfxApiResource result{};
+    BridgeResource* resource = lookup_resource(
+        bridge, lookup_resource_index(bridge, resourceToken.resource));
+    if (!resource)
+        return result;
+    result.resource = resource;
+    result.description = resource->description;
+    result.state = resource->currentState;
+    return result;
+}
+
+/* The public 2.3 effect asks this backend-independent helper only when an
+ * application queries memory usage.  It must exist in the linked renderer
+ * even though Q2RTX does not currently expose that diagnostic.  Return a
+ * conservative byte count for the formats the embedded upscaler profile
+ * creates; Vulkan allocation itself still uses vkGet*MemoryRequirements. */
+FfxErrorCode GetResourceSizeFromDescription(
+    FfxDevice, const FfxCreateResourceDescription* description,
+    uint64_t* sizeInBytes, uint64_t* alignment)
+{
+    if (!description || !sizeInBytes)
+        return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_POINTER);
+    if (description->resourceDescription.type == FFX_API_RESOURCE_TYPE_BUFFER) {
+        *sizeInBytes = description->resourceDescription.size;
+        if (alignment)
+            *alignment = 1u;
+        return FFX_OK;
+    }
+    uint32_t bytesPerPixel = 0u;
+    switch (description->resourceDescription.format) {
+    case FFX_API_SURFACE_FORMAT_R8_UNORM:
+    case FFX_API_SURFACE_FORMAT_R8_UINT:
+    case FFX_API_SURFACE_FORMAT_R8_SNORM:
+        bytesPerPixel = 1u;
+        break;
+    case FFX_API_SURFACE_FORMAT_R16_FLOAT:
+    case FFX_API_SURFACE_FORMAT_R16_UINT:
+    case FFX_API_SURFACE_FORMAT_R16_UNORM:
+    case FFX_API_SURFACE_FORMAT_R16_SNORM:
+    case FFX_API_SURFACE_FORMAT_R8G8_UNORM:
+    case FFX_API_SURFACE_FORMAT_R8G8_UINT:
+        bytesPerPixel = 2u;
+        break;
+    case FFX_API_SURFACE_FORMAT_R32_FLOAT:
+    case FFX_API_SURFACE_FORMAT_R32_UINT:
+    case FFX_API_SURFACE_FORMAT_R16G16_FLOAT:
+    case FFX_API_SURFACE_FORMAT_R16G16_UINT:
+    case FFX_API_SURFACE_FORMAT_R16G16_SINT:
+        bytesPerPixel = 4u;
+        break;
+    case FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT:
+    case FFX_API_SURFACE_FORMAT_R32G32_FLOAT:
+    case FFX_API_SURFACE_FORMAT_R32G32_UINT:
+        bytesPerPixel = 8u;
+        break;
+    case FFX_API_SURFACE_FORMAT_R32G32B32A32_FLOAT:
+    case FFX_API_SURFACE_FORMAT_R32G32B32A32_UINT:
+        bytesPerPixel = 16u;
+        break;
+    default:
+        return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
+    }
+    uint64_t total = 0u;
+    uint64_t width = description->resourceDescription.width;
+    uint64_t height = description->resourceDescription.height;
+    uint64_t depth = std::max(1u, description->resourceDescription.depth);
+    uint32_t mipCount = description->resourceDescription.mipCount;
+    if (mipCount == 0u) {
+        mipCount = 1u;
+        uint64_t mipWidth = width;
+        uint64_t mipHeight = height;
+        while (mipWidth > 1u || mipHeight > 1u) {
+            mipWidth = std::max<uint64_t>(1u, mipWidth >> 1u);
+            mipHeight = std::max<uint64_t>(1u, mipHeight >> 1u);
+            ++mipCount;
+        }
+    }
+    for (uint32_t mip = 0u; mip < mipCount; ++mip) {
+        total += width * height * depth * bytesPerPixel;
+        width = std::max<uint64_t>(1u, width >> 1u);
+        height = std::max<uint64_t>(1u, height >> 1u);
+        depth = std::max<uint64_t>(1u, depth >> 1u);
+    }
+    *sizeInBytes = total;
+    if (alignment)
+        *alignment = 1u;
+    return FFX_OK;
+}
+
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateBackendContext(
     FfxInterface* backend, FfxEffect, FfxEffectBindlessConfig*, FfxUInt32* outContextId)
 {
@@ -691,32 +913,9 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateResource(
         return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
     }
 
-    if (resource->image != VK_NULL_HANDLE) {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = resource->image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = to_vk_format(resource->description.format);
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.levelCount = resource->description.mipCount;
-        viewInfo.subresourceRange.layerCount = resource->description.depth ? resource->description.depth : 1u;
-        if (vkCreateImageView(bridge->device, &viewInfo, bridge->allocationCallbacks,
-                              &resource->srvView) != VK_SUCCESS) {
-            destroy_resource(bridge, resource.get());
-            return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
-        }
-        if (resource->description.usage & FFX_API_RESOURCE_USAGE_UAV) {
-            resource->uavViews.resize(resource->description.mipCount, VK_NULL_HANDLE);
-            for (uint32_t mip = 0; mip < resource->description.mipCount; ++mip) {
-                viewInfo.subresourceRange.baseMipLevel = mip;
-                viewInfo.subresourceRange.levelCount = 1u;
-                if (vkCreateImageView(bridge->device, &viewInfo, bridge->allocationCallbacks,
-                                      &resource->uavViews[mip]) != VK_SUCCESS) {
-                    destroy_resource(bridge, resource.get());
-                    return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
-                }
-            }
-        }
+    if (resource->image != VK_NULL_HANDLE && !create_image_views(bridge, resource.get())) {
+        destroy_resource(bridge, resource.get());
+        return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
     }
 
     /* Upload resources are fully initialized before the host queues a copy.
@@ -817,7 +1016,7 @@ extern "C" FfxApiResource ffxVkFsr3_3_1_5BridgeGetResource(
     if (bridgeResource) {
         result.resource = bridgeResource;
         result.description = bridgeResource->description;
-        result.state = FFX_API_RESOURCE_STATE_COMMON;
+        result.state = bridgeResource->currentState;
     }
     return result;
 }
@@ -831,15 +1030,39 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeRegisterResource(
     const int32_t index = lookup_resource_index(bridge_from(backend), resource->resource);
     if (index == 0)
         return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
+    BridgeResource* bridgeResource = lookup_resource(bridge_from(backend), index);
+    if (!bridgeResource)
+        return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
+    if (bridgeResource->imported) {
+        bridgeResource->restoreState = static_cast<FfxApiResourceState>(resource->state);
+        std::lock_guard<std::mutex> lock(bridge_from(backend)->mutex);
+        const auto& registered = bridge_from(backend)->registeredImportedResources;
+        if (std::find(registered.begin(), registered.end(), index) == registered.end())
+            bridge_from(backend)->registeredImportedResources.push_back(index);
+    }
     outResource->internalIndex = index;
     return FFX_OK;
 }
 
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeUnregisterResources(
-    FfxInterface* backend, FfxCommandList, FfxUInt32)
+    FfxInterface* backend, FfxCommandList commandList, FfxUInt32)
 {
-    if (!bridge_from(backend))
+    FfxVkFsr3_3_1_5Bridge* bridge = bridge_from(backend);
+    VkCommandBuffer commandBuffer = reinterpret_cast<VkCommandBuffer>(commandList);
+    if (!bridge || commandBuffer == VK_NULL_HANDLE)
         return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_POINTER);
+    std::vector<int32_t> registered;
+    {
+        std::lock_guard<std::mutex> lock(bridge->mutex);
+        registered.swap(bridge->registeredImportedResources);
+    }
+    for (const int32_t index : registered) {
+        BridgeResource* resource = lookup_resource(bridge, index);
+        if (!resource || !resource->imported ||
+            !ensure_image_layout(commandBuffer, resource, resource->restoreLayout))
+            return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
+        resource->currentState = resource->restoreState;
+    }
     return FFX_OK;
 }
 

@@ -2,9 +2,10 @@
 # Copyright (c) 2026 Q2RTX FSR Vulkan contributors
 # SPDX-License-Identifier: MIT
 
-# Import the public, source-bearing FSR 3.1.5 closure from SDK 2.3.0.  This
-# is deliberately separate from the proven 1.1.4 implementation: SDK 2.3 has
-# a different backend ABI and must not be mixed with the older Vulkan backend.
+# Import the public SDK 2.3.0 FSR3 closure: the 3.1.5 upscaler and the newer
+# 3.1.6 analytical frame-interpolation/optical-flow sources. This is
+# deliberately separate from the proven 1.1.4 implementation: SDK 2.3 has a
+# different backend ABI and must not be mixed with the older Vulkan backend.
 
 set -euo pipefail
 
@@ -46,6 +47,9 @@ paths=(
     Kits/FidelityFX/upscalers/include
     Kits/FidelityFX/upscalers/fsr3/include
     Kits/FidelityFX/upscalers/fsr3/internal
+    Kits/FidelityFX/framegeneration/include
+    Kits/FidelityFX/framegeneration/fsr3/include
+    Kits/FidelityFX/framegeneration/fsr3/internal
 )
 
 while IFS= read -r path; do
@@ -91,7 +95,7 @@ git -C "$sdk_repo" archive --format=tar "$revision" -- "${paths[@]}" |
 # Always calculate pristine hashes from a fresh archive, never from the
 # destination: the latter intentionally contains the documented Linux patches.
 staging=$(mktemp -d)
-trap 'rm -rf -- "$staging"' EXIT
+trap 'find -- "$staging" -depth -delete; rmdir -- "$staging" 2>/dev/null || true' EXIT
 git -C "$sdk_repo" archive --format=tar "$revision" -- "${paths[@]}" |
     tar -x -C "$staging"
 (
@@ -100,5 +104,15 @@ git -C "$sdk_repo" archive --format=tar "$revision" -- "${paths[@]}" |
 )
 mv -- "$staging/ORIGINAL_SHA256SUMS" "$destination/ORIGINAL_SHA256SUMS"
 
-printf 'Imported %s public FSR 3.1.5 source/header files from %s (%s).\n' \
+# CURRENT records the exact working tree accepted on a later import.  It is
+# intentionally separate from ORIGINAL because the portable source overlay
+# has a few reviewed Linux/backend ABI fixes.  The preflight above verifies
+# every pre-existing file against either its upstream blob or this manifest
+# before this refresh can bless any newly imported source.
+(
+    cd "$destination"
+    find Kits -type f -print0 | sort -z | xargs -0 sha256sum > CURRENT_SHA256SUMS
+)
+
+printf 'Imported %s public SDK 2.3 FSR source/header files from %s (%s).\n' \
     "$(find "$destination/Kits" -type f | wc -l)" "$revision" "$expected_commit"

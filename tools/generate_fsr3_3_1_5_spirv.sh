@@ -94,6 +94,12 @@ common_args=(
     -DFFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS=1
     -DFFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS=0
     -DFFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH=0
+    # The generic HLSL SPD quad path reuses LDS between wave reductions.  GPU-AV
+    # correctly exposes its cross-wave shared-memory hazards on the RDNA2 Vulkan
+    # target. Select AMD's documented LDS-only permutation instead: it has an
+    # explicit workgroup barrier around each intermediate reduction and avoids
+    # requiring an assumed wave/subgroup configuration from the embedding app.
+    -DFFX_SPD_NO_WAVE_OPERATIONS=1
     -I "$core_include"
     -I "$fsr_include"
 )

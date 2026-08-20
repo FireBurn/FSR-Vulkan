@@ -15,6 +15,8 @@ find_package(Vulkan REQUIRED)
 # test-only development file. The generator updates this directory atomically.
 set(FFX_2_3_0_GENERATED_FSR3UPSCALER
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/ffx-2.3.0/vk/fsr3upscaler-q2-v2")
+set(FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/ffx-2.3.0/vk/fsr3framegeneration-q2-v1")
 
 # The source-bearing v07 FSR4 model itself is intentionally not vendored into
 # this reusable module. This target supplies the small, provenance-neutral host
@@ -161,6 +163,57 @@ endif()
 # safe to link against the proven 1.1.4 Vulkan path.
 if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
     set(FFX_2_3_0_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/upstream/ffx-2.3.0/Kits/FidelityFX")
+    # SDK 1.1.4 and SDK 2.3 export the same unversioned C ABI symbols
+    # (ffxFsr3UpscalerContextCreate et al.).  Q2RTX deliberately links the
+    # proven 1.1.4 implementation beside this newer public-SDK experiment, so
+    # make the complete 3.1.5 closure private at link time.  This is not an
+    # API rename for consumers: ffx_vk_fsr3_3_1_5_bridge.h remains the stable,
+    # opaque, versioned interface.
+    set(FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS
+        ffxAssertReport=ffxVk315AssertReport
+        ffxAssertSetPrintingCallback=ffxVk315AssertSetPrintingCallback
+        ffxFsr3UpscalerContextCreate=ffxVk315Fsr3UpscalerContextCreate
+        ffxFsr3UpscalerContextDestroy=ffxVk315Fsr3UpscalerContextDestroy
+        ffxFsr3UpscalerContextDispatch=ffxVk315Fsr3UpscalerContextDispatch
+        ffxFsr3UpscalerContextGenerateReactiveMask=ffxVk315Fsr3UpscalerContextGenerateReactiveMask
+        ffxFsr3UpscalerContextGetGpuMemoryUsage=ffxVk315Fsr3UpscalerContextGetGpuMemoryUsage
+        ffxFsr3UpscalerGetGpuMemoryUsage=ffxVk315Fsr3UpscalerGetGpuMemoryUsage
+        ffxFsr3UpscalerGetJitterOffset=ffxVk315Fsr3UpscalerGetJitterOffset
+        ffxFsr3UpscalerGetJitterPhaseCount=ffxVk315Fsr3UpscalerGetJitterPhaseCount
+        ffxFsr3UpscalerGetRenderResolutionFromQualityMode=ffxVk315Fsr3UpscalerGetRenderResolutionFromQualityMode
+        ffxFsr3UpscalerGetSharedResourceDescriptions=ffxVk315Fsr3UpscalerGetSharedResourceDescriptions
+        ffxFsr3UpscalerGetUpscaleRatioFromQualityMode=ffxVk315Fsr3UpscalerGetUpscaleRatioFromQualityMode
+        ffxFsr3UpscalerResourceIsNull=ffxVk315Fsr3UpscalerResourceIsNull
+        ffxFsr3UpscalerSetConstant=ffxVk315Fsr3UpscalerSetConstant
+        ffxFsr3UpscalerSetGlobalDebugMessage=ffxVk315Fsr3UpscalerSetGlobalDebugMessage
+        frameInterpolationGetPermutationBlobByIndex=ffxVk316FrameInterpolationGetPermutationBlobByIndex
+        frameInterpolationIsWave64=ffxVk316FrameInterpolationIsWave64
+        opticalflowGetPermutationBlobByIndex=ffxVk316OpticalflowGetPermutationBlobByIndex
+        opticalflowIsWave64=ffxVk316OpticalflowIsWave64
+        ffxFrameInterpolationContextCreate=ffxVk316FrameInterpolationContextCreate
+        ffxFrameInterpolationContextDestroy=ffxVk316FrameInterpolationContextDestroy
+        ffxFrameInterpolationContextEnqueueRefreshPipelineRequest=ffxVk316FrameInterpolationContextEnqueueRefreshPipelineRequest
+        ffxFrameInterpolationContextGetGpuMemoryUsage=ffxVk316FrameInterpolationContextGetGpuMemoryUsage
+        ffxFrameInterpolationDispatch=ffxVk316FrameInterpolationDispatch
+        ffxFrameInterpolationGetGpuMemoryUsage=ffxVk316FrameInterpolationGetGpuMemoryUsage
+        ffxFrameInterpolationGetSharedResourceDescriptions=ffxVk316FrameInterpolationGetSharedResourceDescriptions
+        ffxFrameInterpolationPrepare=ffxVk316FrameInterpolationPrepare
+        ffxFrameInterpolationResourceIsNull=ffxVk316FrameInterpolationResourceIsNull
+        ffxFrameInterpolationSetGlobalDebugMessage=ffxVk316FrameInterpolationSetGlobalDebugMessage
+        ffxOpticalflowContextCreate=ffxVk316OpticalflowContextCreate
+        ffxOpticalflowContextDestroy=ffxVk316OpticalflowContextDestroy
+        ffxOpticalflowContextDispatch=ffxVk316OpticalflowContextDispatch
+        ffxOpticalflowContextGetGpuMemoryUsage=ffxVk316OpticalflowContextGetGpuMemoryUsage
+        ffxOpticalflowGetGpuMemoryUsage=ffxVk316OpticalflowGetGpuMemoryUsage
+        ffxOpticalflowGetSharedResourceDescriptions=ffxVk316OpticalflowGetSharedResourceDescriptions
+        ffxOpticalflowResourceIsNull=ffxVk316OpticalflowResourceIsNull
+        ffxSharedContextGetGpuMemoryUsage=ffxVk316SharedContextGetGpuMemoryUsage
+        ffxPrintMessage=ffxVk315PrintMessage
+        ffxSafeReleaseCopyResource=ffxVk315SafeReleaseCopyResource
+        ffxSafeReleasePipeline=ffxVk315SafeReleasePipeline
+        ffxSafeReleaseResource=ffxVk315SafeReleaseResource
+        ffxSetPrintMessageCallback=ffxVk315SetPrintMessageCallback
+    )
     add_library(ffx_vulkan_fsr3_host_3_1_5_scaffold OBJECT
         "${FFX_2_3_0_ROOT}/api/internal/ffx_assert.cpp"
         "${FFX_2_3_0_ROOT}/api/internal/ffx_message.cpp"
@@ -176,6 +229,7 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
     )
     target_compile_definitions(ffx_vulkan_fsr3_host_3_1_5_scaffold PRIVATE
         FFX_VK_PORTABLE_NO_WATERMARK=1
+        ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS}
     )
     target_include_directories(ffx_vulkan_fsr3_host_3_1_5_scaffold PRIVATE
         "${FFX_2_3_0_ROOT}/api/include"
@@ -183,6 +237,8 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
         "${FFX_2_3_0_ROOT}/upscalers/include"
         "${FFX_2_3_0_ROOT}/upscalers/fsr3/include"
         "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal"
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/include"
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal"
     )
     if(MSVC)
         target_compile_options(ffx_vulkan_fsr3_host_3_1_5_scaffold PRIVATE /W4)
@@ -192,8 +248,45 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
             -Wall -Wextra -Wpedantic)
     endif()
 
+    # Keep the newer FI/OF source port separate from the linked upscaler
+    # scaffold.  Both source files deliberately refer to their own generated
+    # shader-blob accessors, which must not be faked merely to make the
+    # upscaler graph test link.  This object-only target is the first strict
+    # portability gate while the genuine Vulkan shader catalogue is built.
+    add_library(ffx_vulkan_fsr3_framegen_3_1_6_scaffold OBJECT
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal/ffx_frameinterpolation.cpp"
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal/ffx_opticalflow.cpp"
+        src/ffx_vk_fsr3_3_1_6_framegen_shaderblobs.cpp
+    )
+    add_library(ffx-vulkan::fsr3-framegen-3.1.6-scaffold ALIAS
+        ffx_vulkan_fsr3_framegen_3_1_6_scaffold)
+    set_target_properties(ffx_vulkan_fsr3_framegen_3_1_6_scaffold PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+    target_compile_definitions(ffx_vulkan_fsr3_framegen_3_1_6_scaffold PRIVATE
+        FFX_VK_PORTABLE_NO_WATERMARK=1
+        ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS}
+    )
+    target_include_directories(ffx_vulkan_fsr3_framegen_3_1_6_scaffold PRIVATE
+        "${FFX_2_3_0_ROOT}/api/include"
+        "${FFX_2_3_0_ROOT}/api/internal"
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/include"
+        "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal"
+        "${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}"
+    )
+    if(MSVC)
+        target_compile_options(ffx_vulkan_fsr3_framegen_3_1_6_scaffold PRIVATE /W4)
+    else()
+        target_compile_options(ffx_vulkan_fsr3_framegen_3_1_6_scaffold PRIVATE
+            -include "${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_1_1_4_portability.hpp"
+            -Wall -Wextra -Wpedantic)
+    endif()
+
     add_library(ffx_vulkan_fsr3_vk_backend_3_1_5 STATIC
         src/ffx_vk_fsr3_3_1_5_bridge.cpp
+        src/ffx_vk_fsr3_3_1_5_upscaler.cpp
         $<TARGET_OBJECTS:ffx_vulkan_fsr3_host_3_1_5_scaffold>
     )
     add_library(ffx-vulkan::fsr3-vk-backend-3.1.5 ALIAS
@@ -211,9 +304,15 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
         "${FFX_2_3_0_ROOT}/upscalers/fsr3/include"
         "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal"
     )
+    target_include_directories(ffx_vulkan_fsr3_vk_backend_3_1_5 PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${FFX_2_3_0_ROOT}/api/include>
+    )
     target_link_libraries(ffx_vulkan_fsr3_vk_backend_3_1_5
         PUBLIC ffx-vulkan::portable Vulkan::Vulkan
     )
+    target_compile_definitions(ffx_vulkan_fsr3_vk_backend_3_1_5 PRIVATE
+        ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})
     if(MSVC)
         target_compile_options(ffx_vulkan_fsr3_vk_backend_3_1_5 PRIVATE /W4)
     else()
@@ -239,7 +338,7 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
             COMMAND "${CMAKE_COMMAND}"
                 "-DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/upstream/ffx-2.3.0/CURRENT_SHA256SUMS"
                 "-DBASE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/upstream/ffx-2.3.0"
-                -DEXPECTED_COUNT=103
+                -DEXPECTED_COUNT=166
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_sha256.cmake"
         )
 
@@ -267,7 +366,8 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
             CXX_EXTENSIONS NO
         )
         target_compile_definitions(ffx_vk_fsr3_3_1_5_host_graph_test PRIVATE
-            FFX_VK_PORTABLE_NO_WATERMARK=1)
+            FFX_VK_PORTABLE_NO_WATERMARK=1
+            ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})
         target_include_directories(ffx_vk_fsr3_3_1_5_host_graph_test PRIVATE
             "${FFX_2_3_0_ROOT}/api/include"
             "${FFX_2_3_0_ROOT}/api/internal"
@@ -285,6 +385,20 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
                 -DEXPECTED_COUNT=11
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_sha256.cmake"
         )
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_source_hashes
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMANIFEST=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}/SOURCE_SHA256SUMS"
+                "-DBASE_DIR=${FFX_2_3_0_ROOT}"
+                -DEXPECTED_COUNT=18
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_sha256.cmake"
+        )
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_generated_hashes
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMANIFEST=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}/SHA256SUMS"
+                "-DBASE_DIR=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}"
+                -DEXPECTED_COUNT=18
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_sha256.cmake"
+        )
         find_program(FFX_VK_3_1_5_SPIRV_VAL spirv-val)
         if(FFX_VK_3_1_5_SPIRV_VAL)
         add_test(NAME ffx_vk_fsr3_3_1_5_spirv_val
@@ -293,6 +407,14 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
                     "-DBASE_DIR=${FFX_2_3_0_GENERATED_FSR3UPSCALER}"
                     "-DVALIDATOR=${FFX_VK_3_1_5_SPIRV_VAL}"
                     -DEXPECTED_COUNT=11
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/validate_spirv_manifest.cmake"
+            )
+            add_test(NAME ffx_vk_fsr3_3_1_6_framegen_spirv_val
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DMANIFEST=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}/SHA256SUMS"
+                    "-DBASE_DIR=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}"
+                    "-DVALIDATOR=${FFX_VK_3_1_5_SPIRV_VAL}"
+                    -DEXPECTED_COUNT=18
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/validate_spirv_manifest.cmake"
             )
         endif()
@@ -334,6 +456,8 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
             "${FFX_2_3_0_ROOT}/upscalers/include"
             "${FFX_2_3_0_ROOT}/upscalers/fsr3/include"
             "${FFX_2_3_0_ROOT}/upscalers/fsr3/internal")
+        target_compile_definitions(ffx_vk_fsr3_3_1_5_bridge_test PRIVATE
+            ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})
         target_link_libraries(ffx_vk_fsr3_3_1_5_bridge_test PRIVATE
             ffx-vulkan::fsr3-vk-backend-3.1.5)
         add_test(NAME ffx_vk_fsr3_3_1_5_bridge_test COMMAND ffx_vk_fsr3_3_1_5_bridge_test)

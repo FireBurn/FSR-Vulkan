@@ -193,17 +193,38 @@ be distinct.
 
 ## SDK 2.3 algorithm port
 
-The public v2.3.0 upscaler source/header closure is now vendored at
+The public v2.3.0 upscaler, Frame Interpolation, and Optical Flow
+source/header closure is now vendored at
 `upstream/ffx-2.3.0/Kits/FidelityFX` by
 `tools/import_fsr3_3_1_5_upstream.sh`. The importer pins commit
 `60f4ea81909200d8542eca14dccb2628b763a9a3`, admits only files carrying an
 individual MIT grant, refuses to overwrite a modified import, and records the
-103 pristine source hashes in `ORIGINAL_SHA256SUMS`. The three public DX12
+166 pristine source hashes in `ORIGINAL_SHA256SUMS`. The three public DX12
 backend source files are retained strictly as the authoritative ABI reference;
 they are not built on Vulkan. `CURRENT_SHA256SUMS`
-records three narrow Linux-port changes: the non-Windows empty `FFX_API_ENTRY`,
-the larger opaque context budget required by four-byte `wchar_t`, and the
-compile-time exclusion of the unpublished AMD watermark/git-header path.
+records six narrow Linux-port changes: the non-Windows empty `FFX_API_ENTRY`,
+the larger opaque context budget required by four-byte `wchar_t`, the
+compile-time exclusion of the unpublished AMD watermark/git-header path, and
+three documented portability/callback fixes in the FSR3 upscaler source and
+its HLSL callback declarations.
+
+The v2.3 Frame Interpolation 3.1.6 and Optical Flow sources are imported for
+the next reusable analytical-FG port. They now compile as the separate
+object-only `ffx-vulkan::fsr3-framegen-3.1.6-scaffold` target, with every
+exported FI/OF entry point privately prefixed `ffxVk316...`; this proves they
+can coexist with the linked 1.1.4 runtime without accidentally binding its
+symbols. `tools/generate_fsr3_3_1_6_framegen_spirv.sh` derives the fixed
+Q2RTX profile from all 11 FI plus 7 OF public HLSL entry points and emits the
+checked 18-module Vulkan 1.2 bundle under
+`generated/ffx-2.3.0/vk/fsr3framegeneration-q2-v1`. It probes each HLSL
+module at disjoint descriptor ranges, then recompiles it with the smallest
+non-overlapping ranges; this both catches collisions and avoids sparse Vulkan
+layouts. Source and output SHA-256 manifests plus CTests make the bundle
+reproducible. The modules are deliberately not linked to the existing 1.1.4
+FI/OF implementation yet: their genuine SDK shader-blob catalogue/scheduler
+bridge and portable presenter integration still need dedicated implementation
+and validation. Do not add dummy blob accessors just to force this gate to
+link.
 
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally

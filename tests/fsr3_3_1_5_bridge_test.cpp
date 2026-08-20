@@ -28,6 +28,8 @@ extern "C" FfxApiResource ffxVkFsr3_3_1_5BridgeGetResource(
     FfxInterface*, FfxResourceInternal);
 extern "C" FfxApiResourceDescription ffxVkFsr3_3_1_5BridgeGetResourceDescription(
     FfxInterface*, FfxResourceInternal);
+extern "C" FfxApiResource ffxVkFsr3_3_1_5BridgeResolveResource(
+    FfxVkFsr3_3_1_5Bridge*, FfxVkFsr3_3_1_5Resource);
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeRegisterResource(
     FfxInterface*, const FfxApiResource*, FfxUInt32, FfxResourceInternal*);
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeUnregisterResources(
@@ -57,18 +59,6 @@ extern "C" FfxErrorCode fsr3UpscalerGetPermutationBlobByIndex(
 extern "C" FfxErrorCode fsr3UpscalerIsWave64(uint32_t, bool& isWave64)
 {
     isWave64 = false;
-    return FFX_OK;
-}
-
-FfxErrorCode GetResourceSizeFromDescription(FfxDevice,
-                                            const FfxCreateResourceDescription*,
-                                            uint64_t* sizeInBytes,
-                                            uint64_t* alignment)
-{
-    if (sizeInBytes)
-        *sizeInBytes = 0u;
-    if (alignment)
-        *alignment = 0u;
     return FFX_OK;
 }
 
@@ -171,6 +161,81 @@ uint32_t find_host_visible_memory(VkPhysicalDevice physical, uint32_t typeBits)
             return index;
     }
     return UINT32_MAX;
+}
+
+uint32_t find_device_local_memory(VkPhysicalDevice physical, uint32_t typeBits)
+{
+    VkPhysicalDeviceMemoryProperties properties{};
+    vkGetPhysicalDeviceMemoryProperties(physical, &properties);
+    for (uint32_t index = 0u; index < properties.memoryTypeCount; ++index) {
+        const VkMemoryPropertyFlags flags = properties.memoryTypes[index].propertyFlags;
+        if ((typeBits & (1u << index)) && (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+            return index;
+    }
+    return UINT32_MAX;
+}
+
+struct ExternalImage {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+};
+
+bool create_external_image(VkPhysicalDevice physical, VkDevice device,
+                           uint32_t width, uint32_t height, VkFormat format,
+                           VkImageUsageFlags usage, ExternalImage* outImage)
+{
+    if (!outImage)
+        return false;
+    VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    VkMemoryAllocateInfo allocationInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    VkMemoryRequirements requirements{};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent = {width, height, 1u};
+    imageInfo.mipLevels = 1u;
+    imageInfo.arrayLayers = 1u;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = usage;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device, &imageInfo, nullptr, &outImage->image) != VK_SUCCESS)
+        return false;
+    vkGetImageMemoryRequirements(device, outImage->image, &requirements);
+    allocationInfo.allocationSize = requirements.size;
+    allocationInfo.memoryTypeIndex = find_device_local_memory(physical, requirements.memoryTypeBits);
+    if (allocationInfo.memoryTypeIndex == UINT32_MAX ||
+        vkAllocateMemory(device, &allocationInfo, nullptr, &outImage->memory) != VK_SUCCESS ||
+        vkBindImageMemory(device, outImage->image, outImage->memory, 0u) != VK_SUCCESS) {
+        if (outImage->memory != VK_NULL_HANDLE)
+            vkFreeMemory(device, outImage->memory, nullptr);
+        vkDestroyImage(device, outImage->image, nullptr);
+        *outImage = {};
+        return false;
+    }
+    return true;
+}
+
+void destroy_external_image(VkDevice device, ExternalImage* image)
+{
+    if (!image)
+        return;
+    if (image->image != VK_NULL_HANDLE)
+        vkDestroyImage(device, image->image, nullptr);
+    if (image->memory != VK_NULL_HANDLE)
+        vkFreeMemory(device, image->memory, nullptr);
+    *image = {};
+}
+
+VkFormat vk_format_from_ffx(uint32_t format)
+{
+    switch (format) {
+    case FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case FFX_API_SURFACE_FORMAT_R32_FLOAT: return VK_FORMAT_R32_SFLOAT;
+    case FFX_API_SURFACE_FORMAT_R32_UINT: return VK_FORMAT_R32_UINT;
+    case FFX_API_SURFACE_FORMAT_R16G16_FLOAT: return VK_FORMAT_R16G16_SFLOAT;
+    case FFX_API_SURFACE_FORMAT_R8_UNORM: return VK_FORMAT_R8_UNORM;
+    default: return VK_FORMAT_UNDEFINED;
+    }
 }
 
 bool verify_rgba16f_output(VkPhysicalDevice physical, VkDevice device, VkQueue queue,
@@ -392,6 +457,313 @@ int main()
         backend.fpDestroyPipeline = ffxVkFsr3_3_1_5BridgeDestroyPipeline;
         if (!expect(bridge != nullptr, "create bridge"))
             goto cleanup;
+        {
+            ExternalImage image{};
+            VkCommandPool commandPool = VK_NULL_HANDLE;
+            VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            VkQueue queue = VK_NULL_HANDLE;
+            FfxVkFsr3_3_1_5ImportedImageDescription imported{};
+            FfxVkFsr3_3_1_5Resource importedImage{};
+            FfxApiResource apiImage{};
+            FfxResourceInternal registered{};
+            FfxGpuJobDescription transition{};
+            VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            poolInfo.queueFamilyIndex = queueFamily;
+            poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            if (!expect(create_external_image(
+                            physical, device, 4u, 4u, VK_FORMAT_R16G16B16A16_SFLOAT,
+                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, &image),
+                        "create caller-owned image") ||
+                !expect(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) == VK_SUCCESS,
+                        "create external-image command pool")) {
+                destroy_external_image(device, &image);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            imported.image = image.image;
+            imported.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            imported.width = 4u;
+            imported.height = 4u;
+            imported.mipCount = 1u;
+            imported.arrayLayers = 1u;
+            imported.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imported.state = FFX_VK_FSR3_3_1_5_RESOURCE_STATE_COMPUTE_READ;
+            imported.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                             VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            importedImage = ffxVkFsr3_3_1_5BridgeImportImage(bridge, &imported);
+            apiImage = ffxVkFsr3_3_1_5BridgeResolveResource(bridge, importedImage);
+            if (!expect(importedImage.resource != nullptr, "import caller-owned image") ||
+                !expect(apiImage.description.format == FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT,
+                        "imported image format") ||
+                !expect(apiImage.state == FFX_API_RESOURCE_STATE_COMPUTE_READ,
+                        "imported image state")) {
+                ffxVkFsr3_3_1_5BridgeReleaseImportedImage(bridge, importedImage);
+                destroy_external_image(device, &image);
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            allocateInfo.commandPool = commandPool;
+            allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocateInfo.commandBufferCount = 1u;
+            if (!expect(vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) == VK_SUCCESS,
+                        "allocate external-image command buffer") ||
+                !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                        "begin external-image command buffer")) {
+                ffxVkFsr3_3_1_5BridgeReleaseImportedImage(bridge, importedImage);
+                destroy_external_image(device, &image);
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            {
+                VkImageMemoryBarrier initialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                initialBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                initialBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                initialBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                initialBarrier.image = image.image;
+                initialBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                initialBarrier.subresourceRange.levelCount = 1u;
+                initialBarrier.subresourceRange.layerCount = 1u;
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
+                                     0u, nullptr, 1u, &initialBarrier);
+            }
+            transition.jobType = FFX_GPU_JOB_BARRIER;
+            if (!expect(ffxVkFsr3_3_1_5BridgeRegisterResource(
+                            &backend, &apiImage, 1u, &registered) == FFX_OK,
+                        "register caller-owned image") ||
+                !expect(registered.internalIndex > 0, "registered imported image")) {
+                ffxVkFsr3_3_1_5BridgeReleaseImportedImage(bridge, importedImage);
+                destroy_external_image(device, &image);
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            transition.barrierDescriptor.resource = registered;
+            transition.barrierDescriptor.barrierType = FFX_BARRIER_TYPE_TRANSITION;
+            transition.barrierDescriptor.currentState = FFX_API_RESOURCE_STATE_COMPUTE_READ;
+            transition.barrierDescriptor.newState = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS;
+            if (!expect(ffxVkFsr3_3_1_5BridgeScheduleGpuJob(&backend, &transition) == FFX_OK,
+                        "schedule imported image transition") ||
+                !expect(ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
+                            &backend, commandBuffer, 1u) == FFX_OK,
+                        "record imported image transition") ||
+                !expect(ffxVkFsr3_3_1_5BridgeUnregisterResources(
+                            &backend, commandBuffer, 1u) == FFX_OK,
+                        "restore imported image layout") ||
+                !expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                        "end external-image command buffer")) {
+                ffxVkFsr3_3_1_5BridgeReleaseImportedImage(bridge, importedImage);
+                destroy_external_image(device, &image);
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            vkGetDeviceQueue(device, queueFamily, 0u, &queue);
+            submitInfo.commandBufferCount = 1u;
+            submitInfo.pCommandBuffers = &commandBuffer;
+            if (!expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit imported image transition") ||
+                !expect(vkQueueWaitIdle(queue) == VK_SUCCESS,
+                        "finish imported image transition")) {
+                ffxVkFsr3_3_1_5BridgeReleaseImportedImage(bridge, importedImage);
+                destroy_external_image(device, &image);
+                vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            ffxVkFsr3_3_1_5BridgeReleaseImportedImage(bridge, importedImage);
+            destroy_external_image(device, &image);
+            vkDestroyCommandPool(device, commandPool, nullptr);
+        }
+        {
+            FfxVkFsr3_3_1_5UpscalerCreateInfo createInfo{};
+            FfxVkFsr3_3_1_5UpscalerContext* portableContext = nullptr;
+            FfxVkFsr3_3_1_5SharedResourceDescriptions shared{};
+            ExternalImage images[9]{};
+            FfxVkFsr3_3_1_5Resource resources[9]{};
+            VkCommandPool commandPool = VK_NULL_HANDLE;
+            VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+            VkQueue queue = VK_NULL_HANDLE;
+            VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            createInfo.physicalDevice = physical;
+            createInfo.device = device;
+            createInfo.maxRenderWidth = 64u;
+            createInfo.maxRenderHeight = 64u;
+            createInfo.maxUpscaleWidth = 128u;
+            createInfo.maxUpscaleHeight = 128u;
+            createInfo.hdrColorInput = VK_TRUE;
+            createInfo.autoExposure = VK_TRUE;
+            const auto cleanupPortable = [&]() {
+                if (portableContext) {
+                    FfxVkFsr3_3_1_5Bridge* portableBridge =
+                        ffxVkFsr3_3_1_5UpscalerContextGetBridge(portableContext);
+                    if (portableBridge) {
+                        for (const FfxVkFsr3_3_1_5Resource& resource : resources)
+                            ffxVkFsr3_3_1_5BridgeReleaseImportedImage(portableBridge, resource);
+                    }
+                }
+                for (ExternalImage& image : images)
+                    destroy_external_image(device, &image);
+                if (commandPool != VK_NULL_HANDLE)
+                    vkDestroyCommandPool(device, commandPool, nullptr);
+                ffxVkFsr3_3_1_5UpscalerContextDestroy(portableContext);
+            };
+            if (!expect(ffxVkFsr3_3_1_5UpscalerContextCreate(
+                            &createInfo, &portableContext) == FFX_VK_FSR3_3_1_5_OK,
+                        "create public SDK 3.1.5 upscaler context") ||
+                !expect(ffxVkFsr3_3_1_5UpscalerContextGetBridge(portableContext) != nullptr,
+                        "get public SDK 3.1.5 bridge") ||
+                !expect(ffxVkFsr3_3_1_5UpscalerContextGetSharedResourceDescriptions(
+                            portableContext, &shared) == FFX_VK_FSR3_3_1_5_OK,
+                        "get public SDK 3.1.5 shared resource descriptions")) {
+                cleanupPortable();
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            struct ImportedFrameDescription {
+                VkFormat format;
+                uint32_t width;
+                uint32_t height;
+            };
+            const ImportedFrameDescription descriptions[9] = {
+                {VK_FORMAT_R16G16B16A16_SFLOAT, 64u, 64u},
+                {VK_FORMAT_R32_SFLOAT, 64u, 64u},
+                {VK_FORMAT_R16G16_SFLOAT, 64u, 64u},
+                {VK_FORMAT_R8_UNORM, 64u, 64u},
+                {VK_FORMAT_R8_UNORM, 64u, 64u},
+                {shared.dilatedDepth.format, shared.dilatedDepth.width, shared.dilatedDepth.height},
+                {shared.dilatedMotionVectors.format, shared.dilatedMotionVectors.width,
+                    shared.dilatedMotionVectors.height},
+                {shared.reconstructedPrevNearestDepth.format,
+                    shared.reconstructedPrevNearestDepth.width,
+                    shared.reconstructedPrevNearestDepth.height},
+                {VK_FORMAT_R16G16B16A16_SFLOAT, 128u, 128u},
+            };
+            FfxVkFsr3_3_1_5Bridge* portableBridge =
+                ffxVkFsr3_3_1_5UpscalerContextGetBridge(portableContext);
+            bool importsOk = portableBridge != nullptr;
+            for (uint32_t index = 0u; importsOk && index < 9u; ++index) {
+                const bool writable = index >= 5u;
+                const VkFormat format = descriptions[index].format;
+                importsOk = format != VK_FORMAT_UNDEFINED &&
+                    create_external_image(physical, device, descriptions[index].width,
+                                          descriptions[index].height, format,
+                                          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                          &images[index]);
+                if (importsOk) {
+                    FfxVkFsr3_3_1_5ImportedImageDescription imported{};
+                    imported.image = images[index].image;
+                    imported.format = format;
+                    imported.width = descriptions[index].width;
+                    imported.height = descriptions[index].height;
+                    imported.mipCount = 1u;
+                    imported.arrayLayers = 1u;
+                    imported.layout = writable ? VK_IMAGE_LAYOUT_GENERAL :
+                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    imported.state = writable
+                        ? FFX_VK_FSR3_3_1_5_RESOURCE_STATE_UNORDERED_ACCESS
+                        : FFX_VK_FSR3_3_1_5_RESOURCE_STATE_COMPUTE_READ;
+                    imported.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                    resources[index] = ffxVkFsr3_3_1_5BridgeImportImage(portableBridge, &imported);
+                    importsOk = resources[index].resource != nullptr;
+                }
+            }
+            poolInfo.queueFamilyIndex = queueFamily;
+            poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            if (!expect(importsOk, "import all public SDK 3.1.5 frame images") ||
+                !expect(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) == VK_SUCCESS,
+                        "create public SDK dispatch command pool")) {
+                cleanupPortable();
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            allocateInfo.commandPool = commandPool;
+            allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocateInfo.commandBufferCount = 1u;
+            if (!expect(vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) == VK_SUCCESS,
+                        "allocate public SDK dispatch command buffer") ||
+                !expect(vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS,
+                        "begin public SDK dispatch command buffer")) {
+                cleanupPortable();
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            {
+                VkImageMemoryBarrier barriers[9]{};
+                for (uint32_t index = 0u; index < 9u; ++index) {
+                    const bool writable = index >= 5u;
+                    barriers[index].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    barriers[index].dstAccessMask = writable ? VK_ACCESS_SHADER_WRITE_BIT :
+                                                            VK_ACCESS_SHADER_READ_BIT;
+                    barriers[index].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    barriers[index].newLayout = writable ? VK_IMAGE_LAYOUT_GENERAL :
+                                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    barriers[index].image = images[index].image;
+                    barriers[index].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    barriers[index].subresourceRange.levelCount = 1u;
+                    barriers[index].subresourceRange.layerCount = 1u;
+                }
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
+                                     0u, nullptr, 9u, barriers);
+            }
+            FfxVkFsr3_3_1_5UpscalerDispatchInfo dispatch{};
+            dispatch.commandBuffer = commandBuffer;
+            dispatch.color = resources[0];
+            dispatch.depth = resources[1];
+            dispatch.motionVectors = resources[2];
+            dispatch.reactive = resources[3];
+            dispatch.transparencyAndComposition = resources[4];
+            dispatch.dilatedDepth = resources[5];
+            dispatch.dilatedMotionVectors = resources[6];
+            dispatch.reconstructedPrevNearestDepth = resources[7];
+            dispatch.output = resources[8];
+            dispatch.motionVectorScaleX = 64.0f;
+            dispatch.motionVectorScaleY = 64.0f;
+            dispatch.renderWidth = 64u;
+            dispatch.renderHeight = 64u;
+            dispatch.upscaleWidth = 128u;
+            dispatch.upscaleHeight = 128u;
+            dispatch.frameTimeMilliseconds = 16.6667f;
+            dispatch.preExposure = 1.0f;
+            dispatch.reset = VK_TRUE;
+            dispatch.cameraNear = 0.1f;
+            dispatch.cameraFar = 1000.0f;
+            dispatch.cameraVerticalFovRadians = 1.0471975512f;
+            dispatch.viewSpaceToMeters = 1.0f;
+            if (!expect(ffxVkFsr3_3_1_5UpscalerContextRecordDispatch(
+                            portableContext, &dispatch) == FFX_VK_FSR3_3_1_5_OK,
+                        "record public SDK 3.1.5 imported-image dispatch") ||
+                !expect(vkEndCommandBuffer(commandBuffer) == VK_SUCCESS,
+                        "end public SDK dispatch command buffer")) {
+                cleanupPortable();
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            vkGetDeviceQueue(device, queueFamily, 0u, &queue);
+            submitInfo.commandBufferCount = 1u;
+            submitInfo.pCommandBuffers = &commandBuffer;
+            if (!expect(vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS,
+                        "submit public SDK imported-image dispatch") ||
+                !expect(vkQueueWaitIdle(queue) == VK_SUCCESS,
+                        "finish public SDK imported-image dispatch")) {
+                cleanupPortable();
+                ffxVkFsr3_3_1_5DestroyBridge(bridge);
+                goto cleanup;
+            }
+            cleanupPortable();
+        }
         for (const wchar_t* name : kPipelineNames) {
             FfxPipelineDescription description{};
             FfxPipelineState pipeline{};
