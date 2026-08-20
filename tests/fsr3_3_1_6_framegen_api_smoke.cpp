@@ -219,9 +219,18 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     dispatch.color = prepare.color;
     dispatch.output = image_info(images[3], colorFormat, 128u, 128u,
                                  VK_IMAGE_LAYOUT_GENERAL);
-    if (useDistortion)
+    if (useDistortion) {
         dispatch.distortionField = image_info(images[4], VK_FORMAT_R16G16_SFLOAT, 128u, 128u,
                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        /* The public field is explicitly float2 UV displacement.  Reject a
+         * same-sized image with a superficially plausible but incompatible
+         * format before recording the valid external-field dispatch. */
+        FfxVkFsr3_3_1_6FrameGenerationDispatchInfo invalid = dispatch;
+        invalid.distortionField.format = VK_FORMAT_R16_SFLOAT;
+        if (ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &invalid) !=
+            FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
+            return false;
+    }
     dispatch.displayWidth = 128u;
     dispatch.displayHeight = 128u;
     dispatch.interpolationWidth = 128u;
