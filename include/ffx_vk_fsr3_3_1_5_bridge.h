@@ -177,8 +177,9 @@ void ffxVkFsr3_3_1_5UpscalerContextDestroy(
  * both record calls has completed on the GPU (normally after its fence).
  * If either record call reports a backend error, conservatively retire after
  * the command buffer is no longer in use as it may contain partial work.
- * This one-frame-in-flight contract is conservative by design; it makes the
- * ownership and synchronization boundary safe for small engines and demos.
+ * `completedFrameId` retires every recorded frame through that monotonic ID,
+ * allowing an application to record several queue-ordered frames before the
+ * corresponding fences signal.
  */
 typedef struct FfxVkFsr3_3_1_6FrameGenerationContext
     FfxVkFsr3_3_1_6FrameGenerationContext;
@@ -272,7 +273,8 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
 
 FfxVkFsr3_3_1_6FrameGenerationResult
 ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(
-    FfxVkFsr3_3_1_6FrameGenerationContext* context);
+    FfxVkFsr3_3_1_6FrameGenerationContext* context,
+    uint64_t completedFrameId);
 
 void ffxVkFsr3_3_1_6FrameGenerationContextDestroy(
     FfxVkFsr3_3_1_6FrameGenerationContext* context);

@@ -179,13 +179,14 @@ bool initialize_images(VkCommandBuffer commandBuffer, const Image* images, uint3
 }
 
 bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffer commandBuffer,
-                  const Image* images, uint64_t frameId, bool reset, bool initialize)
+                  const Image* images, VkFormat colorFormat,
+                  uint64_t frameId, bool reset, bool initialize)
 {
     if (initialize)
         initialize_images(commandBuffer, images, 4u);
     FfxVkFsr3_3_1_6FrameGenerationPrepareInfo prepare{};
     prepare.commandBuffer = commandBuffer;
-    prepare.color = image_info(images[0], VK_FORMAT_R8G8B8A8_UNORM, 128u, 128u,
+    prepare.color = image_info(images[0], colorFormat, 128u, 128u,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     prepare.depth = image_info(images[1], VK_FORMAT_R32_SFLOAT, 64u, 64u,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -211,7 +212,7 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     FfxVkFsr3_3_1_6FrameGenerationDispatchInfo dispatch{};
     dispatch.commandBuffer = commandBuffer;
     dispatch.color = prepare.color;
-    dispatch.output = image_info(images[3], VK_FORMAT_R8G8B8A8_UNORM, 128u, 128u,
+    dispatch.output = image_info(images[3], colorFormat, 128u, 128u,
                                  VK_IMAGE_LAYOUT_GENERAL);
     dispatch.displayWidth = 128u;
     dispatch.displayHeight = 128u;
@@ -233,6 +234,11 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
 
 int main()
 {
+#if defined(FSR316_SMOKE_FLOAT16)
+    const VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+#else
+    const VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+#endif
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
@@ -324,8 +330,8 @@ int main()
         }
     }
     for (uint32_t index = 0u; index < 4u; ++index) {
-        const VkFormat formats[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R32_SFLOAT,
-                                    VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM};
+        const VkFormat formats[] = {colorFormat, VK_FORMAT_R32_SFLOAT,
+                                    VK_FORMAT_R16G16_SFLOAT, colorFormat};
         const uint32_t sizes[] = {128u, 64u, 64u, 128u};
         if (!expect(create_image(physical, device, sizes[index], sizes[index], formats[index], &images[index]),
                     "create public API image"))
@@ -339,7 +345,7 @@ int main()
         create.maxRenderHeight = 64u;
         create.displayWidth = 128u;
         create.displayHeight = 128u;
-        create.colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+        create.colorFormat = colorFormat;
         const FfxVkFsr3_3_1_6FrameGenerationResult createResult =
             ffxVkFsr3_3_1_6FrameGenerationContextCreate(&create, &context);
         if (createResult != FFX_VK_FSR3_3_1_6_FRAMEGEN_OK)
@@ -365,7 +371,7 @@ int main()
                     "allocate public API command buffer") ||
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS,
                     "begin reset frame") ||
-            !expect(record_frame(context, commands, images, 1u, true, true), "record reset frame") ||
+            !expect(record_frame(context, commands, images, colorFormat, 1u, true, true), "record reset frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end reset frame"))
             goto cleanup;
         vkGetDeviceQueue(device, family, 0u, &queue);
@@ -373,22 +379,20 @@ int main()
         submit.pCommandBuffers = &commands;
         if (!expect(vkQueueSubmit(queue, 1u, &submit, VK_NULL_HANDLE) == VK_SUCCESS &&
                     vkQueueWaitIdle(queue) == VK_SUCCESS, "submit reset frame") ||
-            !expect(ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(context) ==
-                    FFX_VK_FSR3_3_1_6_FRAMEGEN_OK, "retire reset frame") ||
             !expect(vkResetCommandPool(device, pool, 0u) == VK_SUCCESS, "reset temporal pool") ||
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS, "begin temporal frame") ||
-            !expect(record_frame(context, commands, images, 2u, false, false), "record temporal frame") ||
+            !expect(record_frame(context, commands, images, colorFormat, 2u, false, false), "record temporal frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end temporal frame") ||
             !expect(vkQueueSubmit(queue, 1u, &submit, VK_NULL_HANDLE) == VK_SUCCESS &&
                     vkQueueWaitIdle(queue) == VK_SUCCESS, "submit temporal frame") ||
-            !expect(ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(context) ==
-                    FFX_VK_FSR3_3_1_6_FRAMEGEN_OK, "retire temporal frame"))
+            !expect(ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(context, 2u) ==
+                    FFX_VK_FSR3_3_1_6_FRAMEGEN_OK, "retire reset+temporal frames"))
             goto cleanup;
     }
     if (!expect(validation.errors == 0u, "Vulkan validation errors"))
         goto cleanup;
-    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (validation warnings=%u)\n",
-                validation.warnings);
+    std::printf("FSR3.1.6 public FI/OF Vulkan API reset+temporal smoke passed (%s; validation warnings=%u)\n",
+                colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "RGBA8", validation.warnings);
     result = validation.warnings ? 1 : 0;
 
 cleanup:

@@ -59,8 +59,10 @@ SDK 2.3 analytical frame generation is separately available as
 `ffx_vk_fsr3_3_1_5_bridge.h` so the opaque SDK 3.1.5 upscaler and privately
 prefixed 3.1.6 FI/OF source can coexist in one application. Its lifecycle is
 `create -> record prepare -> record dispatch -> retire frame -> destroy`.
-`RetireFrame` is required only after the application's GPU fence signals; it
-releases temporary image views retained by the two record calls. This target
+`RetireFrame(completedFrameId)` is required only after the application's GPU
+fence signals; monotonic frame IDs permit multiple queue-ordered frames while
+it releases their temporary image views safely. RGBA8 and RGBA16F colour
+images are both supported and validation-smoked. This target
 records compute work but intentionally does not own a swapchain or pacing
 policy.
 

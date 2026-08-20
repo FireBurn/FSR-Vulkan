@@ -239,8 +239,10 @@ make this target link.
 the shared Vulkan bridge behind an opaque, versioned C lifecycle:
 `create -> prepare -> dispatch -> retire -> destroy`. It owns the five shared
 FI/OF images and retains imported application image views until its explicit
-post-fence `RetireFrame` call. The public-only RX 6800M smoke records reset
-and temporal frames with zero validation warnings/errors. It is a compute
+post-fence `RetireFrame(completedFrameId)` call; monotonic IDs permit multiple
+queue-ordered frames before a fence retires them. The public-only RX 6800M
+smoke records reset and temporal frames with zero validation warnings/errors
+for both RGBA8 and RGBA16F presentation images. It is a compute
 library only; portable presentation and engine integration are intentionally
 separate layers.
 

@@ -80,6 +80,15 @@ static VkFormat to_vk_format(FfxApiSurfaceFormat format)
     }
 }
 
+static FfxApiSurfaceFormat to_ffx_format(VkFormat format)
+{
+    switch (format) {
+    case VK_FORMAT_R8G8B8A8_UNORM: return FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+    default: return FFX_API_SURFACE_FORMAT_UNKNOWN;
+    }
+}
+
 static uint32_t find_memory_type(VkPhysicalDevice physicalDevice, uint32_t bits,
                                  VkMemoryPropertyFlags required)
 {
@@ -254,6 +263,7 @@ struct FfxVkFsr3_3_1_6FrameGenerationContext {
     uint64_t frameId = 0u;
     uint32_t renderWidth = 0u;
     uint32_t renderHeight = 0u;
+    VkFormat colorFormat = VK_FORMAT_UNDEFINED;
     FfxApiResource color{};
     OwnedSharedImage opticalFlowVector{};
     OwnedSharedImage opticalFlowScd{};
@@ -261,6 +271,11 @@ struct FfxVkFsr3_3_1_6FrameGenerationContext {
     OwnedSharedImage dilatedMotionVectors{};
     OwnedSharedImage reconstructedPreviousDepth{};
     std::vector<FfxVkFsr3_3_1_5Resource> pendingImports;
+    struct RetainedFrame {
+        uint64_t frameId = 0u;
+        std::vector<FfxVkFsr3_3_1_5Resource> imports;
+    };
+    std::vector<RetainedFrame> retainedFrames;
 };
 
 extern "C" FfxVkFsr3_3_1_6FrameGenerationResult
@@ -271,7 +286,8 @@ ffxVkFsr3_3_1_6FrameGenerationContextCreate(
     if (!createInfo || !outContext || createInfo->physicalDevice == VK_NULL_HANDLE ||
         createInfo->device == VK_NULL_HANDLE || createInfo->maxRenderWidth == 0u ||
         createInfo->maxRenderHeight == 0u || createInfo->displayWidth == 0u ||
-        createInfo->displayHeight == 0u || createInfo->colorFormat != VK_FORMAT_R8G8B8A8_UNORM)
+        createInfo->displayHeight == 0u ||
+        to_ffx_format(createInfo->colorFormat) == FFX_API_SURFACE_FORMAT_UNKNOWN)
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     *outContext = nullptr;
     FfxVkFsr3_3_1_6FrameGenerationContext* context =
@@ -280,6 +296,7 @@ ffxVkFsr3_3_1_6FrameGenerationContextCreate(
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_OUT_OF_MEMORY;
     context->physicalDevice = createInfo->physicalDevice;
     context->device = createInfo->device;
+    context->colorFormat = createInfo->colorFormat;
     context->bridge = ffxVkFsr3_3_1_5CreateBridgeWithPhysicalDevice(
         context->physicalDevice, context->device, nullptr);
     if (!context->bridge) {
@@ -297,8 +314,8 @@ ffxVkFsr3_3_1_6FrameGenerationContextCreate(
     interpolationDescription.backendInterface = context->backend;
     interpolationDescription.maxRenderSize = {createInfo->maxRenderWidth, createInfo->maxRenderHeight};
     interpolationDescription.displaySize = {createInfo->displayWidth, createInfo->displayHeight};
-    interpolationDescription.backBufferFormat = FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
-    interpolationDescription.previousInterpolationSourceFormat = FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
+    interpolationDescription.backBufferFormat = to_ffx_format(context->colorFormat);
+    interpolationDescription.previousInterpolationSourceFormat = to_ffx_format(context->colorFormat);
     if (result == FFX_OK)
         result = ffxFrameInterpolationContextCreate(&context->interpolation, &interpolationDescription);
     if (result != FFX_OK)
@@ -352,11 +369,11 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
     FfxVkFsr3_3_1_6FrameGenerationContext* context,
     const FfxVkFsr3_3_1_6FrameGenerationPrepareInfo* info)
 {
-    if (!context || !info || context->prepared || !context->pendingImports.empty() ||
+    if (!context || !info || context->prepared ||
         info->commandBuffer == VK_NULL_HANDLE || info->renderWidth == 0u || info->renderHeight == 0u ||
         info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
         info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
-        !valid_image(info->color, VK_FORMAT_R8G8B8A8_UNORM, 1u, 1u, false) ||
+        !valid_image(info->color, context->colorFormat, 1u, 1u, false) ||
         !valid_image(info->depth, VK_FORMAT_R32_SFLOAT, info->renderWidth, info->renderHeight, false) ||
         !valid_image(info->motionVectors, VK_FORMAT_R16G16_SFLOAT, info->renderWidth, info->renderHeight, false))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
@@ -439,8 +456,8 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
         info->displayWidth == 0u || info->displayHeight == 0u ||
         info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
         info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
-        !valid_image(info->color, VK_FORMAT_R8G8B8A8_UNORM, info->displayWidth, info->displayHeight, false) ||
-        !valid_image(info->output, VK_FORMAT_R8G8B8A8_UNORM, info->displayWidth, info->displayHeight, true))
+        !valid_image(info->color, context->colorFormat, info->displayWidth, info->displayHeight, false) ||
+        !valid_image(info->output, context->colorFormat, info->displayWidth, info->displayHeight, true))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     if (info->color.image != ffxVkFsr3_3_1_5BridgeGetNativeImage(context->bridge, context->color.resource))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
@@ -485,25 +502,41 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
     const FfxErrorCode result = ffxFrameInterpolationDispatch(&context->interpolation, &dispatch);
     if (result != FFX_OK)
         return result_from_ffx(result);
-    context->dispatched = true;
-    return FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
-}
-
-extern "C" FfxVkFsr3_3_1_6FrameGenerationResult
-ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(FfxVkFsr3_3_1_6FrameGenerationContext* context)
-{
-    if (!context)
-        return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
-    if (!context->prepared)
-        return FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
-    for (const FfxVkFsr3_3_1_5Resource resource : context->pendingImports)
-        ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, resource);
-    context->pendingImports.clear();
+    context->retainedFrames.push_back({context->frameId, std::move(context->pendingImports)});
     context->color = {};
     context->prepared = false;
     context->dispatched = false;
     context->renderWidth = 0u;
     context->renderHeight = 0u;
+    return FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
+}
+
+extern "C" FfxVkFsr3_3_1_6FrameGenerationResult
+ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(
+    FfxVkFsr3_3_1_6FrameGenerationContext* context, uint64_t completedFrameId)
+{
+    if (!context)
+        return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
+    if (context->prepared && context->frameId <= completedFrameId) {
+        for (const FfxVkFsr3_3_1_5Resource resource : context->pendingImports)
+            ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, resource);
+        context->pendingImports.clear();
+        context->color = {};
+        context->prepared = false;
+        context->dispatched = false;
+        context->renderWidth = 0u;
+        context->renderHeight = 0u;
+    }
+    auto retained = context->retainedFrames.begin();
+    while (retained != context->retainedFrames.end()) {
+        if (retained->frameId <= completedFrameId) {
+            for (const FfxVkFsr3_3_1_5Resource resource : retained->imports)
+                ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, resource);
+            retained = context->retainedFrames.erase(retained);
+        } else {
+            ++retained;
+        }
+    }
     return FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
 }
 
@@ -514,6 +547,11 @@ extern "C" void ffxVkFsr3_3_1_6FrameGenerationContextDestroy(
         return;
     for (const FfxVkFsr3_3_1_5Resource resource : context->pendingImports)
         ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, resource);
+    for (const FfxVkFsr3_3_1_6FrameGenerationContext::RetainedFrame& frame :
+         context->retainedFrames) {
+        for (const FfxVkFsr3_3_1_5Resource resource : frame.imports)
+            ffxVkFsr3_3_1_5BridgeReleaseImportedImage(context->bridge, resource);
+    }
     if (context->interpolationCreated)
         ffxFrameInterpolationContextDestroy(&context->interpolation);
     if (context->opticalFlowCreated)
