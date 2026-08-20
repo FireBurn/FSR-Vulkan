@@ -243,11 +243,14 @@ the fixed 3.1.6 FI/OF profile), while preserving the working 3.1.5 fallback.
 The RX 6800M bridge test passes an FI blob with an intentionally empty pipeline
 name, proving this direct-SPIR-V route is selected rather than the fallback.
 The first direct FI/OF context-creation attempt also supplied the measured
-next gap: these modules use storage-buffer counter bindings, while the current
-bridge reflection is texture-only, and declare storage-image
-read/write-without-format capabilities. Implement generic buffer descriptor
-classes and explicit logical-device feature negotiation before enabling the
-context path.
+next gap: these modules use `rw_counters`/`r_counters` storage-buffer bindings
+and declare storage-image read/write-without-format capabilities. Commit
+`1c51d094` binds those known counter resources through reflected bridge
+metadata, the SDK buffer tables, Vulkan storage-buffer descriptors, and
+compute-job recording. Its current name-based `counters` classifier is a
+measured compatibility step, not a substitute for arbitrary SPIR-V type
+reflection. Explicit logical-device feature negotiation and a
+validation-clean context creation remain required before enabling the path.
 
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally
