@@ -349,11 +349,8 @@ bool dispatch_fi_of_reset_frame(
         stage = "allocate FI/OF dispatch command buffer";
         ok = vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) == VK_SUCCESS;
     }
-    if (ok) {
-        stage = "begin FI/OF dispatch command buffer";
-        ok = vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS;
-    }
-    if (ok) {
+    const auto recordFrame = [&](uint64_t frameId, bool reset, bool initializeLayouts) {
+        if (initializeLayouts) {
         VkImageMemoryBarrier barriers[9]{};
         for (uint32_t index = 0u; index < 9u; ++index) {
             barriers[index].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -370,22 +367,24 @@ bool dispatch_fi_of_reset_frame(
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
                              0u, nullptr, 9u, barriers);
+        }
 
         FfxOpticalflowDispatchDescription opticalFlowDispatch{};
         opticalFlowDispatch.commandList = reinterpret_cast<FfxCommandList>(commandBuffer);
         opticalFlowDispatch.color = resources[0];
         opticalFlowDispatch.opticalFlowVector = resources[1];
         opticalFlowDispatch.opticalFlowSCD = resources[2];
-        opticalFlowDispatch.reset = true;
+        opticalFlowDispatch.reset = reset;
         opticalFlowDispatch.backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
         opticalFlowDispatch.minMaxLuminance = {0.0f, 1.0f};
         stage = "record FI/OF optical-flow dispatch";
         const FfxErrorCode opticalFlowResult =
             ffxOpticalflowContextDispatch(opticalFlow, &opticalFlowDispatch);
-        ok = opticalFlowResult == FFX_OK;
-        if (!ok)
+        if (opticalFlowResult != FFX_OK) {
             std::fprintf(stderr, "FSR3.1.6 optical-flow dispatch returned %u\n",
                          static_cast<unsigned>(opticalFlowResult));
+            return false;
+        }
 
         FfxFrameInterpolationPrepareDescription prepare{};
         prepare.commandList = reinterpret_cast<FfxCommandList>(commandBuffer);
@@ -398,7 +397,7 @@ bool dispatch_fi_of_reset_frame(
         prepare.cameraFovAngleVertical = 1.0471975512f;
         prepare.depth = resources[3];
         prepare.motionVectors = resources[4];
-        prepare.frameID = 1u;
+        prepare.frameID = frameId;
         prepare.dilatedDepth = resources[5];
         prepare.dilatedMotionVectors = resources[6];
         prepare.reconstructedPrevDepth = resources[7];
@@ -406,12 +405,11 @@ bool dispatch_fi_of_reset_frame(
         prepare.cameraRight[0] = 1.0f;
         prepare.cameraForward[2] = -1.0f;
         stage = "record FI prepare dispatch";
-        if (ok) {
-            const FfxErrorCode prepareResult = ffxFrameInterpolationPrepare(frameInterpolation, &prepare);
-            ok = prepareResult == FFX_OK;
-            if (!ok)
-                std::fprintf(stderr, "FSR3.1.6 FI prepare returned %u\n",
-                             static_cast<unsigned>(prepareResult));
+        const FfxErrorCode prepareResult = ffxFrameInterpolationPrepare(frameInterpolation, &prepare);
+        if (prepareResult != FFX_OK) {
+            std::fprintf(stderr, "FSR3.1.6 FI prepare returned %u\n",
+                         static_cast<unsigned>(prepareResult));
+            return false;
         }
 
         FfxFrameInterpolationDispatchDescription dispatch{};
@@ -428,7 +426,7 @@ bool dispatch_fi_of_reset_frame(
         dispatch.opticalFlowScale = {1.0f, 1.0f};
         dispatch.opticalFlowBlockSize = 8u;
         dispatch.frameTimeDelta = 16.6667f;
-        dispatch.reset = true;
+        dispatch.reset = reset;
         dispatch.cameraNear = prepare.cameraNear;
         dispatch.cameraFar = prepare.cameraFar;
         dispatch.cameraFovAngleVertical = prepare.cameraFovAngleVertical;
@@ -436,19 +434,25 @@ bool dispatch_fi_of_reset_frame(
         dispatch.backBufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
         dispatch.minMaxLuminance[0] = 0.0f;
         dispatch.minMaxLuminance[1] = 1.0f;
-        dispatch.frameID = 1u;
+        dispatch.frameID = frameId;
         dispatch.dilatedDepth = resources[5];
         dispatch.dilatedMotionVectors = resources[6];
         dispatch.reconstructedPrevDepth = resources[7];
         stage = "record FI dispatch";
-        if (ok) {
-            const FfxErrorCode dispatchResult = ffxFrameInterpolationDispatch(frameInterpolation, &dispatch);
-            ok = dispatchResult == FFX_OK;
-            if (!ok)
-                std::fprintf(stderr, "FSR3.1.6 FI dispatch returned %u\n",
-                             static_cast<unsigned>(dispatchResult));
+        const FfxErrorCode dispatchResult = ffxFrameInterpolationDispatch(frameInterpolation, &dispatch);
+        if (dispatchResult != FFX_OK) {
+            std::fprintf(stderr, "FSR3.1.6 FI dispatch returned %u\n",
+                         static_cast<unsigned>(dispatchResult));
+            return false;
         }
+        return true;
+    };
+    if (ok) {
+        stage = "begin FI/OF reset-frame command buffer";
+        ok = vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS;
     }
+    if (ok)
+        ok = recordFrame(1u, true, true);
     if (ok) {
         stage = "end FI/OF dispatch command buffer";
         const VkResult endResult = vkEndCommandBuffer(commandBuffer);
@@ -464,6 +468,29 @@ bool dispatch_fi_of_reset_frame(
         ok = vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS &&
              vkQueueWaitIdle(queue) == VK_SUCCESS;
     }
+    if (ok) {
+        stage = "reset FI/OF temporal-frame command pool";
+        ok = vkResetCommandPool(device, commandPool, 0u) == VK_SUCCESS;
+    }
+    if (ok) {
+        stage = "begin FI/OF temporal-frame command buffer";
+        ok = vkBeginCommandBuffer(commandBuffer, &beginInfo) == VK_SUCCESS;
+    }
+    if (ok)
+        ok = recordFrame(2u, false, false);
+    if (ok) {
+        stage = "end FI/OF temporal-frame command buffer";
+        const VkResult endResult = vkEndCommandBuffer(commandBuffer);
+        if (endResult != VK_SUCCESS)
+            std::fprintf(stderr, "FSR3.1.6 FI/OF temporal vkEndCommandBuffer returned %d\n",
+                         (int)endResult);
+        ok = endResult == VK_SUCCESS;
+    }
+    if (ok) {
+        stage = "submit FI/OF temporal frame";
+        ok = vkQueueSubmit(queue, 1u, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS &&
+             vkQueueWaitIdle(queue) == VK_SUCCESS;
+    }
     if (commandPool != VK_NULL_HANDLE)
         vkDestroyCommandPool(device, commandPool, nullptr);
     for (uint32_t index = 0u; index < 9u; ++index) {
@@ -471,8 +498,8 @@ bool dispatch_fi_of_reset_frame(
         destroy_external_image(device, &images[index]);
     }
     if (!ok)
-        std::fprintf(stderr, "FSR3.1.6 FI/OF reset-frame failure at: %s\n", stage);
-    return expect(ok, "record and submit real SDK 3.1.6 FI/OF reset frame");
+        std::fprintf(stderr, "FSR3.1.6 FI/OF frame-sequence failure at: %s\n", stage);
+    return expect(ok, "record and submit real SDK 3.1.6 FI/OF reset and temporal frames");
 }
 
 bool verify_rgba16f_output(VkPhysicalDevice physical, VkDevice device, VkQueue queue,
