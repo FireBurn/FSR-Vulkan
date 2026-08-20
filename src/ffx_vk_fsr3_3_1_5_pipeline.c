@@ -83,6 +83,7 @@ FfxVkPortableResult ffxVkFsr3_3_1_5CreatePipeline(
     VkDescriptorSetLayoutCreateInfo descriptorSetLayoutInfo = {0};
     VkPipelineLayoutCreateInfo pipelineLayoutInfo = {0};
     VkComputePipelineCreateInfo computePipelineInfo = {0};
+    char entryPoint[64];
     uint32_t bindingCount = FFX_VK_FSR3_3_1_5_MAX_PIPELINE_BINDINGS;
 
     if (!createInfo || !outPipeline || !createInfo->spirvWords)
@@ -98,6 +99,10 @@ FfxVkPortableResult ffxVkFsr3_3_1_5CreatePipeline(
         return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
     if (bindingCount == 0u || bindingCount > FFX_VK_FSR3_3_1_5_MAX_PIPELINE_BINDINGS)
         return FFX_VK_PORTABLE_ERROR_UNSUPPORTED;
+    if (ffxVkFsr3_3_1_5ReflectComputeEntryPoint(createInfo->spirvWords,
+                                                  createInfo->spirvWordCount,
+                                                  entryPoint) != FFX_VK_PORTABLE_OK)
+        return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
 
     for (uint32_t index = 0; index < bindingCount; ++index) {
         const VkDescriptorType type = descriptor_type(outPipeline->bindings[index].descriptorClass);
@@ -164,7 +169,7 @@ FfxVkPortableResult ffxVkFsr3_3_1_5CreatePipeline(
     computePipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     computePipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     computePipelineInfo.stage.module = outPipeline->shaderModule;
-    computePipelineInfo.stage.pName = "CS";
+    computePipelineInfo.stage.pName = entryPoint;
     computePipelineInfo.layout = outPipeline->pipelineLayout;
     {
         const VkResult pipelineResult = vkCreateComputePipelines(

@@ -18,6 +18,16 @@ static int compare_binding(const void* left, const void* right)
 
 int main(void)
 {
+    static const uint32_t mainEntryPointSpirv[] = {
+        0x07230203u, 0x00010000u, 0u, 2u, 0u,
+        (uint32_t)((5u << 16u) | 15u), 5u, 1u, 0x6e69616du, 0u
+    };
+    static const uint32_t twoComputeEntryPointsSpirv[] = {
+        0x07230203u, 0x00010000u, 0u, 3u, 0u,
+        (uint32_t)((5u << 16u) | 15u), 5u, 1u, 0x6e69616du, 0u,
+        (uint32_t)((4u << 16u) | 15u), 5u, 2u, 0x5343u
+    };
+    char entryPoint[64];
     const char path[] = FSR3_315_SPV_DIR "/fsr3_3_1_5_prepare_inputs.spv";
     FILE* file = fopen(path, "rb");
     long bytes;
@@ -37,6 +47,16 @@ int main(void)
     FfxVkFsr3_3_1_5DescriptorBinding fiBindings[16];
     int foundCounterUav = 0;
 
+    if (ffxVkFsr3_3_1_5ReflectComputeEntryPoint(mainEntryPointSpirv,
+                                                 sizeof(mainEntryPointSpirv) / sizeof(mainEntryPointSpirv[0]),
+                                                 entryPoint) != FFX_VK_PORTABLE_OK ||
+        strcmp(entryPoint, "main") != 0 ||
+        ffxVkFsr3_3_1_5ReflectComputeEntryPoint(twoComputeEntryPointsSpirv,
+                                                 sizeof(twoComputeEntryPointsSpirv) /
+                                                     sizeof(twoComputeEntryPointsSpirv[0]),
+                                                 entryPoint) != FFX_VK_PORTABLE_ERROR_UNSUPPORTED)
+        return 1;
+
     if (!file) {
         fprintf(stderr, "cannot open generated module: %s\n", path);
         return 1;
@@ -53,6 +73,13 @@ int main(void)
         return 1;
     }
     fclose(file);
+
+    if (ffxVkFsr3_3_1_5ReflectComputeEntryPoint(words, (size_t)bytes / sizeof(*words),
+                                                 entryPoint) != FFX_VK_PORTABLE_OK ||
+        strcmp(entryPoint, "CS") != 0) {
+        free(words);
+        return 1;
+    }
 
     if (ffxVkFsr3_3_1_5ReflectSpirv(words, (size_t)bytes / sizeof(*words),
                                      NULL, &count) != FFX_VK_PORTABLE_OK ||

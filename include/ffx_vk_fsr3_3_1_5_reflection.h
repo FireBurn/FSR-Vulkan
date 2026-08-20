@@ -44,6 +44,16 @@ FfxVkPortableResult ffxVkFsr3_3_1_5ReflectSpirv(
     FfxVkFsr3_3_1_5DescriptorBinding* outBindings,
     uint32_t* inOutBindingCount);
 
+/*
+ * Return the sole GLCompute OpEntryPoint name in a module.  Generated AMD
+ * modules normally use "CS", but SDK-supplied direct SPIR-V can use "main";
+ * callers must use the module declaration instead of an assumed convention.
+ */
+FfxVkPortableResult ffxVkFsr3_3_1_5ReflectComputeEntryPoint(
+    const uint32_t* words,
+    size_t wordCount,
+    char outEntryPoint[64]);
+
 #if defined(__cplusplus)
 }
 #endif

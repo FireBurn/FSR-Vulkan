@@ -10,6 +10,7 @@
 #include <string.h>
 
 #define SPIRV_MAGIC 0x07230203u
+#define SPIRV_OP_ENTRY_POINT 15u
 #define SPIRV_OP_NAME 5u
 #define SPIRV_OP_TYPE_IMAGE 25u
 #define SPIRV_OP_TYPE_SAMPLER 26u
@@ -27,6 +28,7 @@
 #define NO_DESCRIPTOR_SET UINT_MAX
 #define NO_ID UINT_MAX
 #define MAX_SPIRV_BOUND (1u << 20)
+#define SPIRV_EXECUTION_MODEL_GL_COMPUTE 5u
 
 typedef enum SpirvTypeKind {
     SPIRV_TYPE_UNKNOWN = 0,
@@ -108,6 +110,44 @@ static int compare_binding(const void* left, const void* right)
     const FfxVkFsr3_3_1_5DescriptorBinding* a = left;
     const FfxVkFsr3_3_1_5DescriptorBinding* b = right;
     return (a->binding > b->binding) - (a->binding < b->binding);
+}
+
+FfxVkPortableResult ffxVkFsr3_3_1_5ReflectComputeEntryPoint(
+    const uint32_t* words,
+    size_t wordCount,
+    char outEntryPoint[64])
+{
+    int found = 0;
+    size_t offset;
+
+    if (!words || !outEntryPoint)
+        return FFX_VK_PORTABLE_ERROR_INVALID_POINTER;
+    if (wordCount < 5u || words[0] != SPIRV_MAGIC)
+        return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
+
+    for (offset = 5u; offset < wordCount;) {
+        const uint32_t instruction = words[offset];
+        const uint32_t instructionWords = instruction >> 16u;
+        const uint32_t opcode = instruction & 0xffffu;
+        if (instructionWords == 0u || instructionWords > wordCount - offset)
+            return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
+        if (opcode == SPIRV_OP_ENTRY_POINT && instructionWords >= 4u &&
+            words[offset + 1u] == SPIRV_EXECUTION_MODEL_GL_COMPUTE) {
+            const char* name = (const char*)&words[offset + 3u];
+            const size_t available = (size_t)(instructionWords - 3u) * sizeof(uint32_t);
+            size_t length = 0u;
+            while (length < available && name[length] != '\0')
+                ++length;
+            if (length == available || length >= 64u)
+                return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
+            if (found)
+                return FFX_VK_PORTABLE_ERROR_UNSUPPORTED;
+            memcpy(outEntryPoint, name, length + 1u);
+            found = 1;
+        }
+        offset += instructionWords;
+    }
+    return found ? FFX_VK_PORTABLE_OK : FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
 }
 
 FfxVkPortableResult ffxVkFsr3_3_1_5ReflectSpirv(
