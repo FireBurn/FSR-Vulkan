@@ -229,10 +229,11 @@ creation allocates 42 persistent resources and creates all 18 embedded-SPIR-V
 pipelines (11 FI plus 7 OF), then releases them cleanly. It also records the
 real reset Optical-Flow → FI Prepare → FI Dispatch graph against a strict mock:
 15 dynamic resource registrations, 12 staged constant buffers, and 30 final
-FI GPU jobs. This is still not a Vulkan scheduler/backend bridge or portable
-presenter. Those are the next independent implementation and validation
-milestones; do not replace them with a dummy scheduler merely to make this
-target link.
+FI GPU jobs. A direct RX 6800M test also creates every one of the 18 Vulkan
+compute pipelines. This is still not a Vulkan scheduler/backend bridge or
+portable presenter. Those are the next independent implementation and
+validation milestones; do not replace them with a dummy scheduler merely to
+make this target link.
 
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally

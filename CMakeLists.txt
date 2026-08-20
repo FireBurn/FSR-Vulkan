@@ -478,6 +478,20 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         add_test(NAME ffx_vk_fsr3_3_1_6_framegen_host_graph_test
             COMMAND ffx_vk_fsr3_3_1_6_framegen_host_graph_test)
 
+        add_executable(ffx_vk_fsr3_3_1_6_framegen_pipeline_test
+            tests/fsr3_3_1_6_framegen_pipeline_test.cpp)
+        set_target_properties(ffx_vk_fsr3_3_1_6_framegen_pipeline_test PROPERTIES
+            CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        target_include_directories(ffx_vk_fsr3_3_1_6_framegen_pipeline_test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}")
+        target_link_libraries(ffx_vk_fsr3_3_1_6_framegen_pipeline_test PRIVATE
+            ffx-vulkan::portable Vulkan::Vulkan)
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_pipeline_test
+            COMMAND ffx_vk_fsr3_3_1_6_framegen_pipeline_test)
+        set_tests_properties(ffx_vk_fsr3_3_1_6_framegen_pipeline_test PROPERTIES
+            RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+
         add_test(NAME ffx_vk_fsr3_3_1_5_generated_hashes
             COMMAND "${CMAKE_COMMAND}"
                 "-DMANIFEST=${FFX_2_3_0_GENERATED_FSR3UPSCALER}/SHA256SUMS"
