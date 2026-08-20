@@ -220,11 +220,13 @@ checked 18-module Vulkan 1.2 bundle under
 module at disjoint descriptor ranges, then recompiles it with the smallest
 non-overlapping ranges; this both catches collisions and avoids sparse Vulkan
 layouts. Source and output SHA-256 manifests plus CTests make the bundle
-reproducible. The modules are deliberately not linked to the existing 1.1.4
-FI/OF implementation yet: their genuine SDK shader-blob catalogue/scheduler
-bridge and portable presenter integration still need dedicated implementation
-and validation. Do not add dummy blob accessors just to force this gate to
-link.
+reproducible. The fixed Q2RTX profile's real SDK blob accessors now return the
+18 checked embedded Vulkan modules by FI/OF pass and reject every unsupported
+permutation; their dedicated test verifies all returned blobs are SPIR-V and
+checks both error and Wave64-query paths. The imported 3.1.6 host is still not
+linked into a Vulkan scheduler/backend bridge or portable presenter. Those are
+the next independent implementation and validation milestones; do not replace
+them with a dummy scheduler merely to make this target link.
 
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally

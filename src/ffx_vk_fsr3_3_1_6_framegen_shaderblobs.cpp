@@ -25,7 +25,8 @@ constexpr uint32_t kFiModuleCount = FFX_FRAMEINTERPOLATION_PASS_COUNT;
 constexpr uint32_t kOfModuleBase = kFiModuleCount;
 
 static_assert(FFX_VK_FSR3_3_1_6_FRAMEGEN_EMBEDDED_SPIRV_COUNT ==
-                  FFX_FRAMEINTERPOLATION_PASS_COUNT + FFX_OPTICALFLOW_PASS_COUNT,
+                  static_cast<uint32_t>(FFX_FRAMEINTERPOLATION_PASS_COUNT) +
+                      static_cast<uint32_t>(FFX_OPTICALFLOW_PASS_COUNT),
               "embedded FI/OF module table must cover every SDK 3.1.6 pass");
 
 FfxErrorCode set_blob(uint32_t index, FfxShaderBlob* outBlob)

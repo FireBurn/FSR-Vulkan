@@ -378,6 +378,37 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         add_test(NAME ffx_vk_fsr3_3_1_5_host_graph_test
             COMMAND ffx_vk_fsr3_3_1_5_host_graph_test)
 
+        # Exercise the real fixed-profile blob accessors used by the imported
+        # 3.1.6 FI/OF scheduler.  Keep this separately linked from the host
+        # scaffold: a scheduler/backend bridge is still a later milestone.
+        add_executable(ffx_vk_fsr3_3_1_6_framegen_blob_test
+            tests/fsr3_3_1_6_framegen_blob_test.cpp
+            src/ffx_vk_fsr3_3_1_6_framegen_shaderblobs.cpp)
+        set_target_properties(ffx_vk_fsr3_3_1_6_framegen_blob_test PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(ffx_vk_fsr3_3_1_6_framegen_blob_test PRIVATE
+            FFX_VK_PORTABLE_NO_WATERMARK=1
+            ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})
+        target_include_directories(ffx_vk_fsr3_3_1_6_framegen_blob_test PRIVATE
+            "${FFX_2_3_0_ROOT}/api/include"
+            "${FFX_2_3_0_ROOT}/api/internal"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/include"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal"
+            "${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}"
+        )
+        if(MSVC)
+            target_compile_options(ffx_vk_fsr3_3_1_6_framegen_blob_test PRIVATE /W4)
+        else()
+            target_compile_options(ffx_vk_fsr3_3_1_6_framegen_blob_test PRIVATE
+                -include "${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_1_1_4_portability.hpp"
+                -Wall -Wextra -Wpedantic)
+        endif()
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_blob_test
+            COMMAND ffx_vk_fsr3_3_1_6_framegen_blob_test)
+
         add_test(NAME ffx_vk_fsr3_3_1_5_generated_hashes
             COMMAND "${CMAKE_COMMAND}"
                 "-DMANIFEST=${FFX_2_3_0_GENERATED_FSR3UPSCALER}/SHA256SUMS"
@@ -395,6 +426,13 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         add_test(NAME ffx_vk_fsr3_3_1_6_framegen_generated_hashes
             COMMAND "${CMAKE_COMMAND}"
                 "-DMANIFEST=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}/SHA256SUMS"
+                "-DBASE_DIR=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}"
+                -DEXPECTED_COUNT=18
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_sha256.cmake"
+        )
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_embedded_hashes
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMANIFEST=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}/EMBEDDED_SOURCE_SHA256SUMS"
                 "-DBASE_DIR=${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}"
                 -DEXPECTED_COUNT=18
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_sha256.cmake"
