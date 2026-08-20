@@ -357,6 +357,39 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
             -include "${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_1_1_4_portability.hpp"
             -Wall -Wextra -Wpedantic)
     endif()
+
+    # A separate reusable 3.1.6 FI/OF library.  It owns the SDK 2.3 core
+    # closure because the 3.1.5 upscaler scaffold carries the same private
+    # helpers and cannot be linked beside it without duplicate definitions.
+    add_library(ffx_vulkan_fsr3_vk_framegeneration_3_1_6 STATIC
+        src/ffx_vk_fsr3_3_1_5_bridge.cpp
+        src/ffx_vk_fsr3_3_1_6_framegen.cpp
+        $<TARGET_OBJECTS:ffx_vulkan_fsr3_framegen_3_1_6_scaffold>
+        $<TARGET_OBJECTS:ffx_vulkan_fsr3_sdk_core_3_1_5_scaffold>
+    )
+    add_library(ffx-vulkan::fsr3-vk-framegeneration-3.1.6 ALIAS
+        ffx_vulkan_fsr3_vk_framegeneration_3_1_6)
+    set_target_properties(ffx_vulkan_fsr3_vk_framegeneration_3_1_6 PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_include_directories(ffx_vulkan_fsr3_vk_framegeneration_3_1_6
+        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PRIVATE
+            "${FFX_2_3_0_ROOT}/api/include"
+            "${FFX_2_3_0_ROOT}/api/internal"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/include"
+            "${FFX_2_3_0_ROOT}/framegeneration/fsr3/internal"
+            "${FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION}")
+    target_link_libraries(ffx_vulkan_fsr3_vk_framegeneration_3_1_6
+        PUBLIC ffx-vulkan::portable Vulkan::Vulkan)
+    target_compile_definitions(ffx_vulkan_fsr3_vk_framegeneration_3_1_6 PRIVATE
+        ${FFX_3_1_5_PRIVATE_SYMBOL_DEFINITIONS})
+    if(MSVC)
+        target_compile_options(ffx_vulkan_fsr3_vk_framegeneration_3_1_6 PRIVATE /W4)
+    else()
+        target_compile_options(ffx_vulkan_fsr3_vk_framegeneration_3_1_6 PRIVATE
+            -include "${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_1_1_4_portability.hpp"
+            -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 if(FFX_VK_PORTABLE_BUILD_TESTS)
@@ -592,6 +625,17 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         set_tests_properties(ffx_vk_fsr3_3_1_5_bridge_test PROPERTIES
             RUN_SERIAL TRUE
             SKIP_RETURN_CODE 77)
+
+        add_executable(ffx_vk_fsr3_3_1_6_framegen_api_smoke
+            tests/fsr3_3_1_6_framegen_api_smoke.cpp)
+        set_target_properties(ffx_vk_fsr3_3_1_6_framegen_api_smoke PROPERTIES
+            CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        target_link_libraries(ffx_vk_fsr3_3_1_6_framegen_api_smoke PRIVATE
+            ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
+        add_test(NAME ffx_vk_fsr3_3_1_6_framegen_api_smoke
+            COMMAND ffx_vk_fsr3_3_1_6_framegen_api_smoke)
+        set_tests_properties(ffx_vk_fsr3_3_1_6_framegen_api_smoke PROPERTIES
+            RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
     endif()
 
     add_executable(ffx_vk_contract_test tests/contract_test.c)

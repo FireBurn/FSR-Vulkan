@@ -209,8 +209,8 @@ three documented portability/callback fixes in the FSR3 upscaler source and
 its HLSL callback declarations.
 
 The v2.3 Frame Interpolation 3.1.6 and Optical Flow sources are imported for
-the next reusable analytical-FG port. They now compile as the separate
-object-only `ffx-vulkan::fsr3-framegen-3.1.6-scaffold` target, with every
+the reusable analytical-FG port. They compile as the separate object-only
+`ffx-vulkan::fsr3-framegen-3.1.6-scaffold` target, with every
 exported FI/OF entry point privately prefixed `ffxVk316...`; this proves they
 can coexist with the linked 1.1.4 runtime without accidentally binding its
 symbols. `tools/generate_fsr3_3_1_6_framegen_spirv.sh` derives the fixed
@@ -234,6 +234,15 @@ compute pipelines. This is still not a Vulkan scheduler/backend bridge or
 portable presenter. Those are the next independent implementation and
 validation milestones; do not replace them with a dummy scheduler merely to
 make this target link.
+
+`ffx-vulkan::fsr3-vk-framegeneration-3.1.6` packages that source closure with
+the shared Vulkan bridge behind an opaque, versioned C lifecycle:
+`create -> prepare -> dispatch -> retire -> destroy`. It owns the five shared
+FI/OF images and retains imported application image views until its explicit
+post-fence `RetireFrame` call. The public-only RX 6800M smoke records reset
+and temporal frames with zero validation warnings/errors. It is a compute
+library only; portable presentation and engine integration are intentionally
+separate layers.
 
 The existing SDK-2.3 Vulkan resource/job bridge now accepts a valid SPIR-V
 `FfxShaderBlob` directly before consulting its legacy 3.1.5 pass catalogue.

@@ -165,6 +165,118 @@ FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextRecordDispatch(
 void ffxVkFsr3_3_1_5UpscalerContextDestroy(
     FfxVkFsr3_3_1_5UpscalerContext* context);
 
+/*
+ * SDK 2.3's analytical FSR 3.1.6 optical-flow and frame-interpolation
+ * scheduler.  It shares the versioned bridge above, but deliberately has a
+ * separate public lifecycle: the 3.1.5 upscaler and 3.1.6 frame generator
+ * can be linked into the same Vulkan application without exposing either
+ * SDK's unversioned Ffx* symbols.
+ *
+ * RecordPrepare and RecordDispatch keep bridge-created VkImageViews alive
+ * until RetireFrame.  Call RetireFrame only after the submission containing
+ * both record calls has completed on the GPU (normally after its fence).
+ * If either record call reports a backend error, conservatively retire after
+ * the command buffer is no longer in use as it may contain partial work.
+ * This one-frame-in-flight contract is conservative by design; it makes the
+ * ownership and synchronization boundary safe for small engines and demos.
+ */
+typedef struct FfxVkFsr3_3_1_6FrameGenerationContext
+    FfxVkFsr3_3_1_6FrameGenerationContext;
+
+typedef enum FfxVkFsr3_3_1_6FrameGenerationResult {
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_OK = 0,
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT = -1,
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_OUT_OF_MEMORY = -2,
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_BACKEND = -3,
+    FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_IN_FLIGHT = -4,
+} FfxVkFsr3_3_1_6FrameGenerationResult;
+
+typedef struct FfxVkFsr3_3_1_6FrameGenerationImage {
+    VkImage image;
+    VkFormat format;
+    uint32_t width;
+    uint32_t height;
+    VkImageLayout layout;
+    VkImageUsageFlags usage;
+} FfxVkFsr3_3_1_6FrameGenerationImage;
+
+typedef struct FfxVkFsr3_3_1_6FrameGenerationCreateInfo {
+    VkPhysicalDevice physicalDevice;
+    VkDevice device;
+    uint32_t maxRenderWidth;
+    uint32_t maxRenderHeight;
+    uint32_t displayWidth;
+    uint32_t displayHeight;
+    VkFormat colorFormat;
+} FfxVkFsr3_3_1_6FrameGenerationCreateInfo;
+
+typedef struct FfxVkFsr3_3_1_6FrameGenerationPrepareInfo {
+    VkCommandBuffer commandBuffer;
+    FfxVkFsr3_3_1_6FrameGenerationImage color;
+    FfxVkFsr3_3_1_6FrameGenerationImage depth;
+    FfxVkFsr3_3_1_6FrameGenerationImage motionVectors;
+    uint32_t renderWidth;
+    uint32_t renderHeight;
+    float jitterOffsetX;
+    float jitterOffsetY;
+    float motionVectorScaleX;
+    float motionVectorScaleY;
+    float frameTimeMilliseconds;
+    float cameraNear;
+    float cameraFar;
+    float viewSpaceToMeters;
+    float cameraVerticalFovRadians;
+    float cameraPosition[3];
+    float cameraUp[3];
+    float cameraRight[3];
+    float cameraForward[3];
+    uint64_t frameId;
+    VkBool32 reset;
+} FfxVkFsr3_3_1_6FrameGenerationPrepareInfo;
+
+typedef struct FfxVkFsr3_3_1_6FrameGenerationDispatchInfo {
+    VkCommandBuffer commandBuffer;
+    FfxVkFsr3_3_1_6FrameGenerationImage color;
+    FfxVkFsr3_3_1_6FrameGenerationImage output;
+    uint32_t displayWidth;
+    uint32_t displayHeight;
+    uint32_t interpolationX;
+    uint32_t interpolationY;
+    uint32_t interpolationWidth;
+    uint32_t interpolationHeight;
+    float frameTimeMilliseconds;
+    float cameraNear;
+    float cameraFar;
+    float viewSpaceToMeters;
+    float cameraVerticalFovRadians;
+    float minLuminance;
+    float maxLuminance;
+    uint64_t frameId;
+    VkBool32 reset;
+} FfxVkFsr3_3_1_6FrameGenerationDispatchInfo;
+
+FfxVkFsr3_3_1_6FrameGenerationResult
+ffxVkFsr3_3_1_6FrameGenerationContextCreate(
+    const FfxVkFsr3_3_1_6FrameGenerationCreateInfo* createInfo,
+    FfxVkFsr3_3_1_6FrameGenerationContext** outContext);
+
+FfxVkFsr3_3_1_6FrameGenerationResult
+ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
+    FfxVkFsr3_3_1_6FrameGenerationContext* context,
+    const FfxVkFsr3_3_1_6FrameGenerationPrepareInfo* prepareInfo);
+
+FfxVkFsr3_3_1_6FrameGenerationResult
+ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
+    FfxVkFsr3_3_1_6FrameGenerationContext* context,
+    const FfxVkFsr3_3_1_6FrameGenerationDispatchInfo* dispatchInfo);
+
+FfxVkFsr3_3_1_6FrameGenerationResult
+ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(
+    FfxVkFsr3_3_1_6FrameGenerationContext* context);
+
+void ffxVkFsr3_3_1_6FrameGenerationContextDestroy(
+    FfxVkFsr3_3_1_6FrameGenerationContext* context);
+
 #if defined(__cplusplus)
 }
 #endif

@@ -54,6 +54,16 @@ remain linkable and return `FFX_VK_PORTABLE_ERROR_UNSUPPORTED`. Set
 `FFX_VK_PORTABLE_BUILD_FSR3_HOST=OFF` as well to build only the public contract
 and capability probe.
 
+SDK 2.3 analytical frame generation is separately available as
+`ffx-vulkan::fsr3-vk-framegeneration-3.1.6`. Its public declarations live in
+`ffx_vk_fsr3_3_1_5_bridge.h` so the opaque SDK 3.1.5 upscaler and privately
+prefixed 3.1.6 FI/OF source can coexist in one application. Its lifecycle is
+`create -> record prepare -> record dispatch -> retire frame -> destroy`.
+`RetireFrame` is required only after the application's GPU fence signals; it
+releases temporary image views retained by the two record calls. This target
+records compute work but intentionally does not own a swapchain or pacing
+policy.
+
 It also creates `ffx-vulkan::fsr4-v07-assets`, a dependency-free C host helper
 for the source-v07 INT8 asset contract. Given a fixed model or DRS preset and
 output extent, it returns the matching 1080/2160/4320 shader paths, initializer,
