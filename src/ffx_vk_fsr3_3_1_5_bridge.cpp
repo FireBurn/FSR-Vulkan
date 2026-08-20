@@ -1184,7 +1184,7 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
 
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreatePipeline(
     FfxInterface* backend,
-    FfxShaderBlob*,
+    FfxShaderBlob* shaderBlob,
     const FfxPipelineDescription* description,
     FfxUInt32,
     FfxPipelineState* outPipeline)
@@ -1198,13 +1198,29 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreatePipeline(
 
     if (!bridge || !description || !outPipeline)
         return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_POINTER);
-    if (!pass_from_name(description->name, &pass))
-        return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
-    if (pass == 7u)
-        permutation |= 32u; // The host's ACCUM_SHARP pipeline is distinct.
-    if (ffxVkFsr3_3_1_5GetEmbeddedModule(pass, permutation, &words, &wordCount) !=
-        FFX_VK_PORTABLE_OK)
-        return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
+    /* SDK 2.3's FI/OF Vulkan blob accessor returns a checked SPIR-V module
+     * directly.  Prefer it whenever present so this resource/job bridge stays
+     * reusable across public effects.  The historical FSR3.1.5 host still
+     * supplies DX12-style/empty blobs, so preserve its explicit catalogue as
+     * a strict fallback rather than guessing from arbitrary data. */
+    if (shaderBlob && shaderBlob->data && shaderBlob->size >= sizeof(uint32_t) &&
+        shaderBlob->size % sizeof(uint32_t) == 0u) {
+        uint32_t magic = 0u;
+        std::memcpy(&magic, shaderBlob->data, sizeof(magic));
+        if (magic == 0x07230203u) {
+            words = reinterpret_cast<const uint32_t*>(shaderBlob->data);
+            wordCount = shaderBlob->size / sizeof(uint32_t);
+        }
+    }
+    if (!words) {
+        if (!pass_from_name(description->name, &pass))
+            return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
+        if (pass == 7u)
+            permutation |= 32u; // The host's ACCUM_SHARP pipeline is distinct.
+        if (ffxVkFsr3_3_1_5GetEmbeddedModule(pass, permutation, &words, &wordCount) !=
+            FFX_VK_PORTABLE_OK)
+            return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
+    }
 
     owned = new (std::nothrow) BridgePipeline;
     if (!owned)

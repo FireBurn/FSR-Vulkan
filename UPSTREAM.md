@@ -235,6 +235,12 @@ portable presenter. Those are the next independent implementation and
 validation milestones; do not replace them with a dummy scheduler merely to
 make this target link.
 
+The existing SDK-2.3 Vulkan resource/job bridge now accepts a valid SPIR-V
+`FfxShaderBlob` directly before consulting its legacy 3.1.5 pass catalogue.
+That keeps allocation, import, barrier, descriptor, and job-recording code
+reusable for public effects whose scheduler supplies Vulkan blobs (including
+the fixed 3.1.6 FI/OF profile), while preserving the working 3.1.5 fallback.
+
 `ffx-vulkan::fsr3-host-3.1.5-scaffold` compiles the effect and the necessary
 core helpers as an object library with those port defines. It is intentionally
 not linked into the 1.1.4 backend or public C API: success proves that the
