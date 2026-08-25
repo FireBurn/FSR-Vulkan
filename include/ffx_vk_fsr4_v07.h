@@ -49,6 +49,31 @@ typedef struct FfxFsr4VkShaderBlob {
     const char*     entryPoint; ///< e.g. "main" or the DXC-exported name
 } FfxFsr4VkShaderBlob;
 
+/*
+ * The opaque FFX resource ABI carries only a VkImageView.  A Vulkan provider
+ * cannot legally transition or restore that image without its VkImage and the
+ * host's synchronization state.  Register every external image used by the
+ * next dispatch with this record before calling ffxFsr4V07Dispatch.
+ *
+ * The provider transitions `layout` to GENERAL before its compute jobs and
+ * restores `restoreLayout` while unregistering the frame's imports.  Stage and
+ * access fields describe the corresponding producer/consumer operations.  A
+ * GENERAL-to-GENERAL record is valid and still establishes the documented
+ * compute visibility boundary.  The record may be updated every frame; it is
+ * matched by `view` and does not transfer image/view ownership.
+ */
+typedef struct FfxFsr4VkExternalImageState {
+    uint32_t                structSize;
+    VkImage                 image;
+    VkImageView             view;
+    VkImageLayout           layout;
+    VkPipelineStageFlags    stageMask;
+    VkAccessFlags           accessMask;
+    VkImageLayout           restoreLayout;
+    VkPipelineStageFlags    restoreStageMask;
+    VkAccessFlags           restoreAccessMask;
+} FfxFsr4VkExternalImageState;
+
 // FSR4 has: pass0 (pre), pass1-12 (model), pass13 (post), rcas, spd_auto_exposure
 #define FFX_FSR4_VK_PASS_COUNT 16
 
@@ -128,6 +153,14 @@ void ffxFsr4VkDestroyContext(FfxFsr4VkContext* ctx);
 // ---------------------------------------------------------------------------
 VkResult ffxFsr4VkBeginFrame(FfxInterface* iface, uint64_t frameId);
 VkResult ffxFsr4VkRetireFrame(FfxInterface* iface, uint64_t completedFrameId);
+
+/* Register or update host-owned state for one externally imported image.
+ * Unlike provider-owned resources, imports are never assumed to start in
+ * GENERAL.  Returns VK_ERROR_INITIALIZATION_FAILED for an invalid interface,
+ * VK_ERROR_VALIDATION_FAILED_EXT for an incomplete state record, and
+ * VK_ERROR_OUT_OF_POOL_MEMORY when the bounded per-context registry is full. */
+VkResult ffxFsr4VkSetExternalImageState(
+    FfxInterface* iface, const FfxFsr4VkExternalImageState* state);
 
 // ---------------------------------------------------------------------------
 // Helpers for provider-side direct access to backend-owned resources.

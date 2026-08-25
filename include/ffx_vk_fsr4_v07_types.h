@@ -148,6 +148,26 @@ typedef uint32_t FfxApiResourceFlags;
 #define FFX_RESOURCE_FLAGS_NONE       0u
 #define FFX_RESOURCE_FLAGS_ALIASABLE  1u
 
+/* Kept numerically compatible with SDK 2.3's FfxApiResourceState.  The
+ * provider needs this to distinguish a sampled external image from an output
+ * image even though Vulkan uses VK_IMAGE_LAYOUT_GENERAL for both. */
+typedef enum FfxApiResourceState {
+    FFX_API_RESOURCE_STATE_COMMON             = 1u << 0,
+    FFX_API_RESOURCE_STATE_UNORDERED_ACCESS   = 1u << 1,
+    FFX_API_RESOURCE_STATE_COMPUTE_READ       = 1u << 2,
+    FFX_API_RESOURCE_STATE_PIXEL_READ         = 1u << 3,
+    FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ =
+        FFX_API_RESOURCE_STATE_PIXEL_READ | FFX_API_RESOURCE_STATE_COMPUTE_READ,
+    FFX_API_RESOURCE_STATE_COPY_SRC           = 1u << 4,
+    FFX_API_RESOURCE_STATE_COPY_DEST          = 1u << 5,
+    FFX_API_RESOURCE_STATE_GENERIC_READ =
+        FFX_API_RESOURCE_STATE_COPY_SRC | FFX_API_RESOURCE_STATE_COMPUTE_READ,
+    FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT  = 1u << 6,
+    FFX_API_RESOURCE_STATE_PRESENT            = 1u << 7,
+    FFX_API_RESOURCE_STATE_RENDER_TARGET      = 1u << 8,
+    FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT   = 1u << 9,
+} FfxApiResourceState;
+
 /* ── resource description ────────────────────────────────────────────────── */
 
 typedef struct FfxApiResourceDescription {

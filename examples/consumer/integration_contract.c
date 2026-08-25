@@ -23,6 +23,9 @@ int main(void)
     /* This portable asset gate is linkable without a renderer/device. */
     if (ffxFsr4VkValidateShaderLayout(NULL, 0u) != VK_ERROR_INVALID_SHADER_NV)
         return 1;
+    if (ffxFsr4VkSetExternalImageState(NULL, NULL) !=
+        VK_ERROR_INITIALIZATION_FAILED)
+        return 1;
 
     /* Keep WSI ownership in the host while sharing generated→real invariants. */
     if (ffxVkFrameGenerationRequiredImageCount(3u, true) != 5u ||

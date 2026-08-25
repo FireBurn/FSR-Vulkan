@@ -3,16 +3,16 @@
 // Implements all 19 FfxInterface function pointers so the existing
 // ffx_provider_fsr4 dispatch logic runs on Vulkan unchanged.
 //
-// Two descriptor set layouts are used:
+// The generated graph uses two descriptor ABIs:
 //
-//   LAYOUT_MODEL  (passes 1-12): 4 storage buffers
+//   model passes (1-12): storage buffers
 //     Compiled with: -fvk-t-shift 0 0 -fvk-u-shift 2 0
 //     bind 0  STORAGE_BUFFER  input SRV    (t0 ByteAddressBuffer)
 //     bind 1  STORAGE_BUFFER  weights SRV  (t1 ByteAddressBuffer)
 //     bind 2  STORAGE_BUFFER  output UAV   (u0 RWByteAddressBuffer)
 //     bind 3  STORAGE_BUFFER  scratch UAV  (u1 RWByteAddressBuffer)
 //
-//   LAYOUT_FULL (passes 0, 13, 14, 15): textures + images + buffers + cbuffers
+//   full passes (0, 13, 14, 15): textures + images + buffers + cbuffers
 //     Compiled with: -fvk-t-shift 0 0 -fvk-s-shift 35 0 -fvk-u-shift 21 0 -fvk-b-shift 43 0
 //     bind  0..20  SAMPLED_IMAGE           t0..t20 (Texture2D SRVs)
 //     bind 21..33  STORAGE_IMAGE           u0..u12 (RWTexture2D UAVs)
@@ -34,6 +34,7 @@
 #define MAX_DESC_SETS        64   /* per pool — up to 16 FSR4/SPD/RCAS passes */
 #define NUM_POOL_FRAMES       3   /* maximum unretired host dispatches */
 #define MAX_STAGING          32
+#define MAX_EXTERNAL_IMAGES   8   /* color, depth, motion, output + host slack */
 #define CBUF_FRAME_BYTES   (512 * 1024)
 #define CBUF_RING_BYTES    (CBUF_FRAME_BYTES * NUM_POOL_FRAMES)
 
@@ -95,7 +96,20 @@ typedef struct {
     VkDeviceSize   allocationSize;
     int            external;
     int            needsInit;  /* 1 = image needs UNDEFINED→GENERAL transition */
+    uint32_t       apiState;
+    VkImageLayout  layout;
+    VkPipelineStageFlags stageMask;
+    VkAccessFlags  accessMask;
+    VkImageLayout  restoreLayout;
+    VkPipelineStageFlags restoreStageMask;
+    VkAccessFlags  restoreAccessMask;
+    int            externalStateKnown;
+    int            externalTouched;
 } VkRes;
+
+typedef struct {
+    FfxFsr4VkExternalImageState state;
+} ExternalImageState;
 
 typedef enum { PIPE_MODEL=0, PIPE_FULL=1 } PipeKind;
 
@@ -148,6 +162,8 @@ struct FfxFsr4VkContext {
 
     VkRes    res[MAX_RESOURCES];
     uint32_t resCount;
+    ExternalImageState externalImages[MAX_EXTERNAL_IMAGES];
+    uint32_t externalImageCount;
 
     VkPipe   pipe[MAX_PIPELINES];
 
@@ -168,6 +184,9 @@ struct FfxFsr4VkContext {
     VkBool32  computeDerivativesSupported;
 };
 
+static FfxErrorCode restoreExternalImages(FfxFsr4VkContext* c,
+                                          VkCommandBuffer cmd);
+
 static VkDescriptorType expectedDescriptorType(uint32_t passIdx, uint32_t binding)
 {
     if (passIdx >= FFX_FSR4_VK_PASS_COUNT) return VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -184,6 +203,17 @@ static VkDescriptorType expectedDescriptorType(uint32_t passIdx, uint32_t bindin
         return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     if (binding == SLOT_SAMPLER) return VK_DESCRIPTOR_TYPE_SAMPLER;
     return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+}
+
+static const FfxFsr4VkExternalImageState* findExternalImageState(
+    const FfxFsr4VkContext* c, VkImageView view)
+{
+    if (!c || !view) return NULL;
+    for (uint32_t i = 0; i < c->externalImageCount; ++i) {
+        if (c->externalImages[i].state.view == view)
+            return &c->externalImages[i].state;
+    }
+    return NULL;
 }
 
 static VkResult reflectShaderLayout(const FfxFsr4VkShaderBlob* shader,
@@ -956,9 +986,25 @@ static FfxErrorCode cbRegisterRes(FfxInterface* I,
             return FFX_ERROR_INVALID_ARGUMENT;
         r->kind=RES_IMAGE;
         r->view=(VkImageView)in->resource;
+        const FfxFsr4VkExternalImageState* state =
+            findExternalImageState(c, r->view);
+        /* The FFX resource ABI exposes only a view.  Requiring the separate
+         * state record prevents a reusable Vulkan host from silently relying
+         * on Q2RTX's historic GENERAL-layout convention. */
+        if (!state)
+            return FFX_ERROR_INVALID_ARGUMENT;
+        r->img = state->image;
         r->w=in->description.width;
         r->h=in->description.height>0?in->description.height:1;
         r->fmt=fmt;
+        r->apiState = in->state;
+        r->layout = state->layout;
+        r->stageMask = state->stageMask;
+        r->accessMask = state->accessMask;
+        r->restoreLayout = state->restoreLayout;
+        r->restoreStageMask = state->restoreStageMask;
+        r->restoreAccessMask = state->restoreAccessMask;
+        r->externalStateKnown = 1;
     } else if (in->description.type == FFX_RESOURCE_TYPE_BUFFER) {
         if (!in->description.size) return FFX_ERROR_INVALID_SIZE;
         r->kind=RES_BUFFER;
@@ -983,9 +1029,15 @@ static FfxApiResource cbGetRes(FfxInterface* I, FfxResourceInternal ri) {
 }
 
 static FfxErrorCode cbUnregisterRes(FfxInterface* I, FfxCommandList cmd, FfxUInt32 id) {
-    (void)cmd;(void)id;
+    (void)id;
     if (!I || !I->device) return FFX_ERROR_INVALID_POINTER;
     FfxFsr4VkContext* c = (FfxFsr4VkContext*)I->device;
+
+    /* The provider calls unregister on the same command buffer after Execute.
+     * Restore imports before dropping their tracking records, including the
+     * error path after partially recorded work. */
+    if (restoreExternalImages(c, (VkCommandBuffer)cmd) != FFX_OK)
+        return FFX_ERROR_INVALID_POINTER;
 
     /* If scheduling failed before ExecuteGpuJobs, queued compute/copy jobs may
      * still name the soon-to-be-removed external indices.  Preserve only the
@@ -1187,6 +1239,48 @@ static void imgBarrier(VkCommandBuffer cmd, VkImage img,
     vkCmdPipelineBarrier(cmd,ss,ds,0,0,NULL,0,NULL,1,&b);
 }
 
+static void transitionExternalImagesToCompute(FfxFsr4VkContext* c,
+                                              VkCommandBuffer cmd)
+{
+    for (uint32_t i = 0; i < c->resCount; ++i) {
+        VkRes* r = &c->res[i];
+        if (!r->external || r->kind != RES_IMAGE || !r->img ||
+            !r->externalStateKnown)
+            continue;
+        VkPipelineStageFlags srcStage = r->layout == VK_IMAGE_LAYOUT_UNDEFINED
+            ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : r->stageMask;
+        VkAccessFlags srcAccess = r->layout == VK_IMAGE_LAYOUT_UNDEFINED
+            ? 0u : r->accessMask;
+        imgBarrier(cmd, r->img, r->layout, VK_IMAGE_LAYOUT_GENERAL,
+            srcAccess, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            srcStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        r->layout = VK_IMAGE_LAYOUT_GENERAL;
+        r->stageMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        r->accessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        r->externalTouched = 1;
+    }
+}
+
+static FfxErrorCode restoreExternalImages(FfxFsr4VkContext* c,
+                                          VkCommandBuffer cmd)
+{
+    if (!cmd) return FFX_ERROR_INVALID_POINTER;
+    for (uint32_t i = 0; i < c->resCount; ++i) {
+        VkRes* r = &c->res[i];
+        if (!r->external || r->kind != RES_IMAGE || !r->img ||
+            !r->externalStateKnown || !r->externalTouched)
+            continue;
+        imgBarrier(cmd, r->img, r->layout, r->restoreLayout,
+            r->accessMask, r->restoreAccessMask,
+            r->stageMask, r->restoreStageMask);
+        r->layout = r->restoreLayout;
+        r->stageMask = r->restoreStageMask;
+        r->accessMask = r->restoreAccessMask;
+        r->externalTouched = 0;
+    }
+    return FFX_OK;
+}
+
 // ── descriptor writing helpers ────────────────────────────────────────────────
 
 static FfxErrorCode writeModelDs(FfxFsr4VkContext* c, const VkPipe* pipe,
@@ -1246,13 +1340,16 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, const VkPipe* pipe, VkDescr
     // ── SRV textures t0..t20 → bindings 0..20 (SAMPLED_IMAGE) ──
     // Use VK_IMAGE_LAYOUT_GENERAL for all images.  Internal images (history,
     // recurrent, reprojected, exposure) are also used as UAV STORAGE_IMAGE in
-    // other passes, so they must stay in GENERAL.  External images (TAA output)
-    // are transitioned to GENERAL by fsr.c before dispatch.
+    // other passes, so they must stay in GENERAL. External images enter
+    // GENERAL through the public state-registration contract before dispatch.
     for (uint32_t i=0; i<cj->pipeline.srvTextureCount && i<21; i++) {
         uint32_t idx=cj->srvTextures[i].resource.internalIndex;
         if (idx == UINT32_MAX) continue;
         if (!pipe->bindingPresent[SLOT_SRV_TEX_BASE + i]) continue;
         if (idx<c->resCount && c->res[idx].kind==RES_IMAGE && c->res[idx].view) {
+            if (c->res[idx].external &&
+                !(c->res[idx].apiState & FFX_API_RESOURCE_STATE_COMPUTE_READ))
+                return FFX_ERROR_INVALID_ARGUMENT;
             imgs[ic]=(VkDescriptorImageInfo){VK_NULL_HANDLE, c->res[idx].view,
                 VK_IMAGE_LAYOUT_GENERAL};
             wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1268,6 +1365,9 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, const VkPipe* pipe, VkDescr
         if (idx == UINT32_MAX) continue;
         if (!pipe->bindingPresent[SLOT_UAV_BASE + i]) continue;
         if (idx<c->resCount && c->res[idx].kind==RES_IMAGE && c->res[idx].view) {
+            if (c->res[idx].external &&
+                !(c->res[idx].apiState & FFX_API_RESOURCE_STATE_UNORDERED_ACCESS))
+                return FFX_ERROR_INVALID_ARGUMENT;
             imgs[ic]=(VkDescriptorImageInfo){VK_NULL_HANDLE, c->res[idx].view,
                 VK_IMAGE_LAYOUT_GENERAL};
             wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1398,6 +1498,11 @@ static FfxErrorCode cbExecuteJobs(FfxInterface* I, FfxCommandList cl, FfxUInt32 
         }
         (void)init_count;
     }
+
+    /* Imported resources carry their exact host layout/stage/access metadata.
+     * Move them to the provider's GENERAL compute ABI only after all resource
+     * registration has succeeded, then restore them during unregister. */
+    transitionExternalImagesToCompute(c, cmd);
 
     for (uint32_t ji=0; ji<c->jobCount; ji++) {
         FfxGpuJobDescription* job=&c->jobs[ji].d;
@@ -1762,6 +1867,30 @@ VkResult ffxFsr4VkRetireFrame(FfxInterface* iface, uint64_t completedFrameId)
         vkFreeMemory(c->dev, st->mem, c->alloc);
         c->staging[i] = c->staging[--c->stagingCount];
     }
+    return VK_SUCCESS;
+}
+
+VkResult ffxFsr4VkSetExternalImageState(
+    FfxInterface* iface, const FfxFsr4VkExternalImageState* state)
+{
+    if (!iface || !iface->device)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (!state || state->structSize != sizeof(*state) || !state->image ||
+        !state->view || !state->stageMask || !state->restoreStageMask ||
+        state->restoreLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        state->restoreLayout == VK_IMAGE_LAYOUT_PREINITIALIZED)
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+
+    FfxFsr4VkContext* c = (FfxFsr4VkContext*)iface->device;
+    for (uint32_t i = 0; i < c->externalImageCount; ++i) {
+        if (c->externalImages[i].state.view == state->view) {
+            c->externalImages[i].state = *state;
+            return VK_SUCCESS;
+        }
+    }
+    if (c->externalImageCount >= MAX_EXTERNAL_IMAGES)
+        return VK_ERROR_OUT_OF_POOL_MEMORY;
+    c->externalImages[c->externalImageCount++].state = *state;
     return VK_SUCCESS;
 }
 

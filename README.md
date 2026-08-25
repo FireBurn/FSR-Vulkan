@@ -133,6 +133,16 @@ host fence proves those command buffers have completed. This retires descriptor
 sets, staged model uploads, and the corresponding host-visible constant-buffer
 partition without assuming a particular swapchain or frames-in-flight policy.
 
+Every FSR4 external image must also be registered with
+`ffxFsr4VkSetExternalImageState` before `ffxFsr4V07Dispatch`. The FFX ABI
+itself contains only a `VkImageView`, so this separate record supplies the
+underlying `VkImage`, current layout/stage/access, and requested restored
+layout/stage/access. The provider transitions the image to `GENERAL` for its
+compute passes and restores the requested state while unregistering imports.
+Inputs must have `FFX_API_RESOURCE_STATE_COMPUTE_READ`; the output must have
+`FFX_API_RESOURCE_STATE_UNORDERED_ACCESS`. This is an explicit host ownership
+boundary, not an assumption that all renderers use Q2RTX's layout convention.
+
 Before pipeline creation, the v07 provider reflects each supplied SPIR-V module
 and rejects descriptor set/binding/type declarations outside its documented
 v07 ABI. `ffxFsr4VkValidateShaderLayout` exposes the same fail-closed check to
