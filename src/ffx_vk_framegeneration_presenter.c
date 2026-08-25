@@ -54,6 +54,12 @@ bool ffxVkFrameGenerationShouldPresentGenerated(bool interpolationDispatched,
     return interpolationDispatched && !reset;
 }
 
+bool ffxVkFrameGenerationTransitionNeedsQuiescence(bool wasFrameGenerationActive,
+                                                   bool isFrameGenerationActive)
+{
+    return wasFrameGenerationActive != isFrameGenerationActive;
+}
+
 size_t ffxVkFrameGenerationRenderFinishedSemaphoreIndex(uint32_t imageIndex,
                                                          uint32_t gpuIndex,
                                                          uint32_t deviceCount)

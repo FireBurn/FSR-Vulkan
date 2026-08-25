@@ -43,6 +43,12 @@ bool ffxVkFrameGenerationValidateAcquiredPair(uint32_t generatedImageIndex,
 bool ffxVkFrameGenerationShouldPresentGenerated(bool interpolationDispatched,
                                                 bool reset);
 
+/* Switching between ordinary and generated→real presentation can leave the
+ * prior mode's binary present wait pending after its rendering fence completes.
+ * Quiesce the present queue once before reusing presentation semaphores. */
+bool ffxVkFrameGenerationTransitionNeedsQuiescence(bool wasFrameGenerationActive,
+                                                   bool isFrameGenerationActive);
+
 /* Render-complete binary semaphores must be owned by image and GPU, never a
  * frame-in-flight. Callers allocate imageCount * deviceCount entries. */
 size_t ffxVkFrameGenerationRenderFinishedSemaphoreIndex(uint32_t imageIndex,

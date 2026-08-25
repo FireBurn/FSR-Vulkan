@@ -42,6 +42,11 @@ int main(void)
     CHECK(!ffxVkFrameGenerationShouldPresentGenerated(true, true));
     CHECK(!ffxVkFrameGenerationShouldPresentGenerated(false, false));
 
+    CHECK(ffxVkFrameGenerationTransitionNeedsQuiescence(true, false));
+    CHECK(ffxVkFrameGenerationTransitionNeedsQuiescence(false, true));
+    CHECK(!ffxVkFrameGenerationTransitionNeedsQuiescence(true, true));
+    CHECK(!ffxVkFrameGenerationTransitionNeedsQuiescence(false, false));
+
     CHECK(ffxVkFrameGenerationRenderFinishedSemaphoreIndex(3, 0, 2) == 6u);
     CHECK(ffxVkFrameGenerationRenderFinishedSemaphoreIndex(3, 1, 2) == 7u);
     CHECK(ffxVkFrameGenerationRenderFinishedSemaphoreIndex(0, 1, 0) == SIZE_MAX);
