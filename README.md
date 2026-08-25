@@ -68,12 +68,57 @@ policy. `RecordDispatch` also accepts an optional sampled `R16G16_SFLOAT`
 distortion field containing `UV_after - UV_before` for lens/post-process
 distortion; leave it null for the provider's neutral internal field.
 
-It also creates `ffx-vulkan::fsr4-v07-assets`, a dependency-free C host helper
+The project also creates `ffx-vulkan::fsr4-v07-assets`, a dependency-free C host helper
 for the source-v07 INT8 asset contract. Given a fixed model or DRS preset and
 output extent, it returns the matching 1080/2160/4320 shader paths, initializer,
 pass-0 weights, RCAS, and SPD names. It contains no model bytes, filesystem
 policy, Vulkan dispatch backend, or claim of FSR 4.1.1 support; applications use
 it to avoid accidentally mixing a graph with another model's weights.
+
+`ffx-vulkan::fsr4-v07-vulkan` is the matching source-v07 Vulkan compute
+provider. It consumes application-owned Vulkan objects and model/SPIR-V bytes,
+and exposes versioned `ffxFsr4V07…` functions so it does not collide with an
+AMD SDK/DLL's unversioned FFX exports. `FfxFsr4V07CreateContext` copies the
+explicit `FfxInterface` installed by `ffxFsr4V07SetBackendInterface`; no
+renderer global is required. It is the same target Q2RTX links.
+
+## Use in another Vulkan project
+
+For all FSR3 paths, vendor this directory (including `upstream/` and
+`generated/`) and use `add_subdirectory`:
+
+```cmake
+add_subdirectory(extern/ffx-vulkan)
+target_link_libraries(my_renderer PRIVATE
+    ffx-vulkan::portable
+    ffx-vulkan::fsr3-vk-framegeneration-3.1.6
+    ffx-vulkan::fsr4-v07-vulkan)
+```
+
+The application retains instance/device/queue/swapchain ownership. It records
+FSR3 or FSR4 work in its own command buffer, keeps imported images alive until
+its frame fence signals, and composes UI after interpolation. The FSR3 public
+headers document the exact resource/layout and fence-retirement contracts.
+
+The dependency-complete FSR4-v07 subset can also be installed as a CMake
+package:
+
+```sh
+cmake -S extern/ffx-vulkan -B build/ffx-vulkan
+cmake --build build/ffx-vulkan --target ffx_vulkan_fsr4_v07_vulkan
+cmake --install build/ffx-vulkan --prefix /opt/ffx-vulkan
+cmake -S extern/ffx-vulkan/examples/consumer -B build/consumer \
+  -DCMAKE_PREFIX_PATH=/opt/ffx-vulkan
+cmake --build build/consumer
+```
+
+The `examples/consumer` project is intentionally a compile/link contract, not
+a renderer. It is a minimal starting point for a host that already owns Vulkan
+initialization. The v07 provider does **not** include or install model weights
+or shader binaries: obtain them under their applicable terms, keep a complete
+same-preset bundle together, and load the names returned by
+`ffxFsr4V07BuildAssetSet`. It is experimental source-v07 code, not FSR 4.1.1,
+Ray Regeneration, or ML Frame Generation.
 
 The tests verify the complete patched-source and generated-file hash manifests,
 all 2,816 upscaler, 352 Frame Interpolation, and 56 Optical Flow valid

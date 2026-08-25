@@ -8,6 +8,10 @@ option(FFX_VK_PORTABLE_BUILD_FSR3_HOST "Build the pinned AMD FSR 3.1.4 host sche
 option(FFX_VK_PORTABLE_BUILD_FSR3_VK_BACKEND "Build the pinned AMD FSR 3.1.4 native Vulkan upscaler backend" ON)
 option(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD
     "Compile the public SDK 2.3 FSR 3.1.5 host source as a standalone port scaffold" ON)
+option(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN
+    "Build the experimental source-v07 FSR4 INT8/DOT4 Vulkan provider" ON)
+option(FFX_VK_PORTABLE_INSTALL
+    "Install portable headers, libraries, and a CMake package" ON)
 
 find_package(Vulkan REQUIRED)
 
@@ -21,20 +25,49 @@ set(FFX_2_3_0_GENERATED_FSR3FRAMEGENERATION
 # The source-bearing v07 FSR4 model itself is intentionally not vendored into
 # this reusable module. This target supplies the small, provenance-neutral host
 # contract that selects one coherent generated shader/weight bundle.
-set(FFX_FSR4_V07_HOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../src/refresh/vkpt/fsr4")
 add_library(ffx_vulkan_fsr4_v07_assets STATIC
-    "${FFX_FSR4_V07_HOST_ROOT}/ffx_fsr4_schedule.c"
-    "${FFX_FSR4_V07_HOST_ROOT}/ffx_fsr4_assets.c"
+    src/ffx_vk_fsr4_v07_schedule.c
+    src/ffx_vk_fsr4_v07_assets.c
 )
 add_library(ffx-vulkan::fsr4-v07-assets ALIAS ffx_vulkan_fsr4_v07_assets)
+set_property(TARGET ffx_vulkan_fsr4_v07_assets PROPERTY
+    EXPORT_NAME fsr4-v07-assets)
 target_compile_features(ffx_vulkan_fsr4_v07_assets PUBLIC c_std_11)
 target_include_directories(ffx_vulkan_fsr4_v07_assets PUBLIC
-    "${FFX_FSR4_V07_HOST_ROOT}"
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
 )
 if(MSVC)
     target_compile_options(ffx_vulkan_fsr4_v07_assets PRIVATE /W4)
 else()
     target_compile_options(ffx_vulkan_fsr4_v07_assets PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
+    add_library(ffx_vulkan_fsr4_v07_vulkan STATIC
+        src/ffx_vk_fsr4_v07.c
+        src/ffx_vk_fsr4_v07_provider.c
+    )
+    add_library(ffx-vulkan::fsr4-v07-vulkan ALIAS
+        ffx_vulkan_fsr4_v07_vulkan)
+    set_property(TARGET ffx_vulkan_fsr4_v07_vulkan PROPERTY
+        EXPORT_NAME fsr4-v07-vulkan)
+    target_compile_features(ffx_vulkan_fsr4_v07_vulkan PUBLIC c_std_11)
+    target_include_directories(ffx_vulkan_fsr4_v07_vulkan
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>)
+    target_link_libraries(ffx_vulkan_fsr4_v07_vulkan
+        PUBLIC ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(ffx_vulkan_fsr4_v07_vulkan PUBLIC m)
+    endif()
+    if(MSVC)
+        target_compile_options(ffx_vulkan_fsr4_v07_vulkan PRIVATE /W4)
+    else()
+        target_compile_options(ffx_vulkan_fsr4_v07_vulkan PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 add_library(ffx_vulkan_portable STATIC
@@ -61,6 +94,41 @@ if(MSVC)
     target_compile_options(ffx_vulkan_portable PRIVATE /W4)
 else()
     target_compile_options(ffx_vulkan_portable PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(FFX_VK_PORTABLE_INSTALL)
+    include(CMakePackageConfigHelpers)
+    include(GNUInstallDirs)
+
+    set(FFX_VK_PORTABLE_INSTALL_TARGETS
+        ffx_vulkan_fsr4_v07_assets)
+    if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
+        list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
+            ffx_vulkan_fsr4_v07_vulkan)
+    endif()
+
+    install(TARGETS ${FFX_VK_PORTABLE_INSTALL_TARGETS}
+        EXPORT ffx-vulkan-targets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(EXPORT ffx-vulkan-targets
+        FILE ffx-vulkan-targets.cmake
+        NAMESPACE ffx-vulkan::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
+    configure_package_config_file(
+        cmake/ffx-vulkan-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config-version.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
 endif()
 
 if(FFX_VK_PORTABLE_BUILD_FSR3_HOST)
@@ -688,7 +756,7 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
     add_test(NAME ffx_vk_contract_test COMMAND ffx_vk_contract_test)
 
     add_executable(ffx_vk_fsr4_v07_assets_test
-        "${FFX_FSR4_V07_HOST_ROOT}/tests/test_fsr4_schedule.c")
+        tests/fsr4_v07_assets_test.c)
     target_link_libraries(ffx_vk_fsr4_v07_assets_test PRIVATE
         ffx-vulkan::fsr4-v07-assets)
     add_test(NAME ffx_vk_fsr4_v07_assets_test COMMAND ffx_vk_fsr4_v07_assets_test)
