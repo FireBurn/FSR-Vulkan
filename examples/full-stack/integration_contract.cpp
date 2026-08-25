@@ -35,7 +35,9 @@ int main()
     auto fi_memory = &ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage;
     auto rr_validate = &ffxVkRayRegenerationValidateInputs;
     auto camera_cut = &ffxVkTemporalCameraCutDetected;
+    auto acquire_pair = &ffxVkFrameGenerationAcquirePair;
     return fsr3_portable_memory != nullptr && fsr3_create != nullptr &&
            fsr3_memory != nullptr && fi_create != nullptr && fi_memory != nullptr &&
-           rr_validate != nullptr && camera_cut != nullptr ? 0 : 3;
+           rr_validate != nullptr && camera_cut != nullptr &&
+           acquire_pair != nullptr ? 0 : 3;
 }

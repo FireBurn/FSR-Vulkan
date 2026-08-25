@@ -37,6 +37,45 @@ bool ffxVkFrameGenerationValidateAcquiredPair(uint32_t generatedImageIndex,
                                               uint32_t realImageIndex,
                                               uint32_t swapchainImageCount);
 
+/* The host retains all WSI ownership, but a frame-generation host needs the
+ * same careful two-acquire result handling on every window system. This
+ * callback can wrap vkAcquireNextImageKHR, vkAcquireNextImage2KHR, or a
+ * renderer's WSI abstraction. It must signal `availableSemaphore` only when
+ * it returns VK_SUCCESS or VK_SUBOPTIMAL_KHR. */
+typedef VkResult (*FfxVkFrameGenerationAcquireImageFn)(void *userData,
+                                                        VkSemaphore availableSemaphore,
+                                                        uint32_t *outImageIndex);
+
+/* A first acquired image remains valid even when the second acquisition
+ * cannot form a generated->real pair. In that case `generatedImageAcquired`
+ * is true while `paired` is false; render and present it normally using
+ * `generatedImageIndex` and `generatedAvailableSemaphore`. Do not acquire a
+ * third image merely to fall back. */
+typedef struct FfxVkFrameGenerationAcquiredPair {
+    uint32_t generatedImageIndex;
+    uint32_t realImageIndex;
+    VkSemaphore generatedAvailableSemaphore;
+    VkSemaphore realAvailableSemaphore;
+    VkResult generatedAcquireResult;
+    VkResult realAcquireResult;
+    bool generatedImageAcquired;
+    bool realImageAcquired;
+    bool paired;
+} FfxVkFrameGenerationAcquiredPair;
+
+/* Acquire the generated target followed by the real target through the host's
+ * callback. A valid pair returns VK_SUCCESS or VK_SUBOPTIMAL_KHR. If the
+ * second acquire fails, that result is returned and the output still records
+ * the first image for a normal one-image fallback. If the first acquire fails,
+ * the callback is not invoked a second time. */
+VkResult ffxVkFrameGenerationAcquirePair(
+    FfxVkFrameGenerationAcquireImageFn acquireImage,
+    void *userData,
+    VkSemaphore generatedAvailableSemaphore,
+    VkSemaphore realAvailableSemaphore,
+    uint32_t swapchainImageCount,
+    FfxVkFrameGenerationAcquiredPair *outPair);
+
 /* A successful reset dispatch establishes interpolation history but has no
  * preceding image from which an intermediate image can be generated. Present
  * the real image for that paired slot and resume generation next frame. */

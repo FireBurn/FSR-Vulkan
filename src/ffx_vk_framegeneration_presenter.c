@@ -48,6 +48,53 @@ bool ffxVkFrameGenerationValidateAcquiredPair(uint32_t generatedImageIndex,
            generatedImageIndex != realImageIndex;
 }
 
+static bool ffx_vk_framegeneration_acquire_succeeded(VkResult result)
+{
+    return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
+}
+
+VkResult ffxVkFrameGenerationAcquirePair(
+    FfxVkFrameGenerationAcquireImageFn acquireImage,
+    void *userData,
+    VkSemaphore generatedAvailableSemaphore,
+    VkSemaphore realAvailableSemaphore,
+    uint32_t swapchainImageCount,
+    FfxVkFrameGenerationAcquiredPair *outPair)
+{
+    if (!outPair)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    *outPair = (FfxVkFrameGenerationAcquiredPair) {
+        .generatedAvailableSemaphore = generatedAvailableSemaphore,
+        .realAvailableSemaphore = realAvailableSemaphore,
+        .generatedAcquireResult = VK_ERROR_INITIALIZATION_FAILED,
+        .realAcquireResult = VK_ERROR_INITIALIZATION_FAILED,
+    };
+    if (!acquireImage || swapchainImageCount < 2u)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    outPair->generatedAcquireResult = acquireImage(userData,
+        generatedAvailableSemaphore, &outPair->generatedImageIndex);
+    if (!ffx_vk_framegeneration_acquire_succeeded(
+            outPair->generatedAcquireResult))
+        return outPair->generatedAcquireResult;
+    outPair->generatedImageAcquired = true;
+
+    outPair->realAcquireResult = acquireImage(userData,
+        realAvailableSemaphore, &outPair->realImageIndex);
+    if (!ffx_vk_framegeneration_acquire_succeeded(outPair->realAcquireResult))
+        return outPair->realAcquireResult;
+    outPair->realImageAcquired = true;
+    outPair->paired = ffxVkFrameGenerationValidateAcquiredPair(
+        outPair->generatedImageIndex, outPair->realImageIndex,
+        swapchainImageCount);
+    if (!outPair->paired)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    return outPair->generatedAcquireResult == VK_SUBOPTIMAL_KHR ||
+           outPair->realAcquireResult == VK_SUBOPTIMAL_KHR
+        ? VK_SUBOPTIMAL_KHR : VK_SUCCESS;
+}
+
 bool ffxVkFrameGenerationShouldPresentGenerated(bool interpolationDispatched,
                                                 bool reset)
 {

@@ -4,6 +4,26 @@
 
 static int failures;
 
+typedef struct acquire_sequence_s {
+    VkResult results[2];
+    uint32_t indices[2];
+    unsigned int calls;
+} acquire_sequence_t;
+
+static VkResult acquire_sequence(void *user_data, VkSemaphore semaphore,
+    uint32_t *out_image_index)
+{
+    acquire_sequence_t *sequence = user_data;
+    const unsigned int call = sequence->calls++;
+    (void)semaphore;
+    if (call >= 2u)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (sequence->results[call] == VK_SUCCESS ||
+        sequence->results[call] == VK_SUBOPTIMAL_KHR)
+        *out_image_index = sequence->indices[call];
+    return sequence->results[call];
+}
+
 #define CHECK(expr) do { \
     if (!(expr)) { \
         fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expr); \
@@ -37,6 +57,56 @@ int main(void)
     CHECK(!ffxVkFrameGenerationValidateAcquiredPair(0, 0, 4));
     CHECK(!ffxVkFrameGenerationValidateAcquiredPair(0, 4, 4));
     CHECK(!ffxVkFrameGenerationValidateAcquiredPair(0, 1, 1));
+
+    {
+        acquire_sequence_t sequence = {
+            .results = { VK_SUCCESS, VK_SUCCESS }, .indices = { 1, 3 },
+        };
+        FfxVkFrameGenerationAcquiredPair pair;
+        CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
+            (VkSemaphore)(uintptr_t)1, (VkSemaphore)(uintptr_t)2, 4, &pair) == VK_SUCCESS);
+        CHECK(sequence.calls == 2u);
+        CHECK(pair.generatedImageAcquired && pair.realImageAcquired && pair.paired);
+        CHECK(pair.generatedImageIndex == 1u && pair.realImageIndex == 3u);
+    }
+    {
+        acquire_sequence_t sequence = {
+            .results = { VK_SUBOPTIMAL_KHR, VK_SUCCESS }, .indices = { 0, 2 },
+        };
+        FfxVkFrameGenerationAcquiredPair pair;
+        CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
+            VK_NULL_HANDLE, VK_NULL_HANDLE, 4, &pair) == VK_SUBOPTIMAL_KHR);
+        CHECK(pair.generatedImageAcquired && pair.realImageAcquired && pair.paired);
+    }
+    {
+        acquire_sequence_t sequence = {
+            .results = { VK_SUCCESS, VK_NOT_READY }, .indices = { 2, 0 },
+        };
+        FfxVkFrameGenerationAcquiredPair pair;
+        CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
+            VK_NULL_HANDLE, VK_NULL_HANDLE, 4, &pair) == VK_NOT_READY);
+        CHECK(sequence.calls == 2u);
+        CHECK(pair.generatedImageAcquired && !pair.realImageAcquired && !pair.paired);
+        CHECK(pair.generatedImageIndex == 2u);
+    }
+    {
+        acquire_sequence_t sequence = {
+            .results = { VK_ERROR_OUT_OF_DATE_KHR, VK_SUCCESS }, .indices = { 0, 1 },
+        };
+        FfxVkFrameGenerationAcquiredPair pair;
+        CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
+            VK_NULL_HANDLE, VK_NULL_HANDLE, 4, &pair) == VK_ERROR_OUT_OF_DATE_KHR);
+        CHECK(sequence.calls == 1u && !pair.generatedImageAcquired);
+    }
+    {
+        acquire_sequence_t sequence = {
+            .results = { VK_SUCCESS, VK_SUCCESS }, .indices = { 1, 1 },
+        };
+        FfxVkFrameGenerationAcquiredPair pair;
+        CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
+            VK_NULL_HANDLE, VK_NULL_HANDLE, 4, &pair) == VK_ERROR_INITIALIZATION_FAILED);
+        CHECK(pair.generatedImageAcquired && pair.realImageAcquired && !pair.paired);
+    }
 
     CHECK(ffxVkFrameGenerationShouldPresentGenerated(true, false));
     CHECK(!ffxVkFrameGenerationShouldPresentGenerated(true, true));

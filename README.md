@@ -12,8 +12,10 @@ Opaque public C APIs create, destroy, and record upscaling plus frame-generation
 work without exposing an AMD type. The generated Vulkan shader tables are
 checked in with manifests. Q2RTX supplies a validation-tested two-acquire,
 generated-then-real reference presenter; extracting that WSI policy as a
-general-purpose standalone policy library is complete, while a full generic
-acquire/submit callback API remains future work.
+general-purpose standalone policy library is complete. Its callback-based
+two-image acquisition API also preserves the first acquired image for a safe
+normal-present fallback when WSI cannot provide the second target; generic
+render submission and presentation callbacks remain application-owned.
 
 ## Design boundary
 
@@ -93,9 +95,12 @@ renderer global is required. It is the same target Q2RTX links.
 `ffx-vulkan::framegeneration-presenter-policy` is the reusable WSI policy
 layer used by Q2RTX. It does not acquire or present images for the application;
 instead it codifies FIFO selection for generated→real pairs, `minImageCount +
-2` requirements, pair validation, and image/GPU semaphore ownership. This
-keeps platform windowing and queue submission in the host while avoiding the
-common binary-semaphore and Mailbox/Immediate mistakes.
+2` requirements, pair validation, image/GPU semaphore ownership, and the
+callback-based `ffxVkFrameGenerationAcquirePair` helper. The latter works with
+either core or device-group image acquisition and leaves a first acquired image
+available for normal presentation when the second acquire fails. This keeps
+platform windowing and queue submission in the host while avoiding common
+binary-semaphore and Mailbox/Immediate mistakes.
 
 ## Use in another Vulkan project
 
