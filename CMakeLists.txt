@@ -482,6 +482,31 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
     endif()
 endif()
 
+# Convenience integration surface for a Vulkan application that vendors this
+# project.  It deliberately expresses availability through its transitive
+# targets instead of hiding version selection behind a global runtime switch:
+# hosts can link the individual effect targets when they want a smaller
+# closure, or this one when they expose the complete tested FSR3/FSR4 menu.
+add_library(ffx_vulkan_effects INTERFACE)
+add_library(ffx-vulkan::effects ALIAS ffx_vulkan_effects)
+target_link_libraries(ffx_vulkan_effects INTERFACE
+    ffx-vulkan::portable
+    ffx-vulkan::fsr4-v07-assets
+    ffx-vulkan::framegeneration-presenter-policy)
+if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
+    target_link_libraries(ffx_vulkan_effects INTERFACE
+        ffx-vulkan::fsr4-v07-vulkan)
+endif()
+if(FFX_VK_PORTABLE_BUILD_FSR3_VK_BACKEND)
+    target_link_libraries(ffx_vulkan_effects INTERFACE
+        ffx-vulkan::fsr3-vk-backend-1.1.4)
+endif()
+if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
+    target_link_libraries(ffx_vulkan_effects INTERFACE
+        ffx-vulkan::fsr3-vk-backend-3.1.5
+        ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
+endif()
+
 if(FFX_VK_PORTABLE_BUILD_TESTS)
     enable_testing()
 

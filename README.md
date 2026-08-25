@@ -107,6 +107,20 @@ target_link_libraries(my_renderer PRIVATE
     ffx-vulkan::fsr4-v07-vulkan)
 ```
 
+For a host that wants the complete tested FSR3+FSR4 feature closure, link the
+convenience `ffx-vulkan::effects` target instead. It is demonstrated by the
+independent [full-stack contract](examples/full-stack):
+
+```sh
+cmake -S extern/ffx-vulkan/examples/full-stack -B build/ffx-full-stack
+cmake --build build/ffx-full-stack
+./build/ffx-full-stack/ffx_vk_full_stack_contract
+```
+
+This route is intentionally vendored rather than installed: the compact
+installed CMake package is dependency-complete for FSR4 v07 and presentation
+policy, while reusable FSR3 targets retain their pinned AMD SDK source closure.
+
 The application retains instance/device/queue/swapchain ownership. It records
 FSR3 or FSR4 work in its own command buffer, keeps imported images alive until
 its frame fence signals, and composes UI after interpolation. The FSR3 public
