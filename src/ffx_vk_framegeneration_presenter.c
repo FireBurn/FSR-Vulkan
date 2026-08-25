@@ -48,6 +48,12 @@ bool ffxVkFrameGenerationValidateAcquiredPair(uint32_t generatedImageIndex,
            generatedImageIndex != realImageIndex;
 }
 
+bool ffxVkFrameGenerationShouldPresentGenerated(bool interpolationDispatched,
+                                                bool reset)
+{
+    return interpolationDispatched && !reset;
+}
+
 size_t ffxVkFrameGenerationRenderFinishedSemaphoreIndex(uint32_t imageIndex,
                                                          uint32_t gpuIndex,
                                                          uint32_t deviceCount)

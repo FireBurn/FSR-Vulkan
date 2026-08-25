@@ -37,6 +37,12 @@ bool ffxVkFrameGenerationValidateAcquiredPair(uint32_t generatedImageIndex,
                                               uint32_t realImageIndex,
                                               uint32_t swapchainImageCount);
 
+/* A successful reset dispatch establishes interpolation history but has no
+ * preceding image from which an intermediate image can be generated. Present
+ * the real image for that paired slot and resume generation next frame. */
+bool ffxVkFrameGenerationShouldPresentGenerated(bool interpolationDispatched,
+                                                bool reset);
+
 /* Render-complete binary semaphores must be owned by image and GPU, never a
  * frame-in-flight. Callers allocate imageCount * deviceCount entries. */
 size_t ffxVkFrameGenerationRenderFinishedSemaphoreIndex(uint32_t imageIndex,

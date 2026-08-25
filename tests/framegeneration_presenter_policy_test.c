@@ -38,6 +38,10 @@ int main(void)
     CHECK(!ffxVkFrameGenerationValidateAcquiredPair(0, 4, 4));
     CHECK(!ffxVkFrameGenerationValidateAcquiredPair(0, 1, 1));
 
+    CHECK(ffxVkFrameGenerationShouldPresentGenerated(true, false));
+    CHECK(!ffxVkFrameGenerationShouldPresentGenerated(true, true));
+    CHECK(!ffxVkFrameGenerationShouldPresentGenerated(false, false));
+
     CHECK(ffxVkFrameGenerationRenderFinishedSemaphoreIndex(3, 0, 2) == 6u);
     CHECK(ffxVkFrameGenerationRenderFinishedSemaphoreIndex(3, 1, 2) == 7u);
     CHECK(ffxVkFrameGenerationRenderFinishedSemaphoreIndex(0, 1, 0) == SIZE_MAX);
