@@ -293,6 +293,17 @@ requires every external image to remain alive until the recorded GPU work
 completes. The API does not wait for the GPU on destruction, so the application
 must do that with its normal frame fences.
 
+### Upscaler allocation accounting
+
+Both reusable upscaler lifecycles expose the exact effect-owned allocation
+total after context creation: `ffxVkPortableUpscaleContextGetMemoryUsage` for
+the FSR3 1.1.4 portable API (set `FfxVkPortableMemoryUsage::structSize`), and
+`ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage` for the SDK 2.3 / FSR3 3.1.5
+bridge. Imported application images are never counted. The 3.1.5 bridge gives
+each SDK resource a separate `VkDeviceMemory` allocation, so its aliasable
+total is accurately zero. `FFX_VK_PORTABLE_ABI_VERSION` is 2 for this additive
+portable API revision.
+
 The pinned backend retains dynamic external-image views for eight effect calls
 rather than the upstream four. This is intentional: analytical frame
 interpolation records a preparation workload and a generation workload for one

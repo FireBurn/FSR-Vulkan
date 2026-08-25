@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define FFX_VK_PORTABLE_ABI_VERSION 1u
+#define FFX_VK_PORTABLE_ABI_VERSION 2u
 
 typedef enum FfxVkPortableResult {
     FFX_VK_PORTABLE_OK = 0,
@@ -29,6 +29,14 @@ typedef enum FfxVkPortableResult {
 
 typedef struct FfxVkPortableUpscaleContext FfxVkPortableUpscaleContext;
 typedef struct FfxVkPortableFrameGenerationContext FfxVkPortableFrameGenerationContext;
+
+/* SDK-reported memory owned by the FSR effect. Application-provided color,
+ * depth, motion, and output images are deliberately excluded. */
+typedef struct FfxVkPortableMemoryUsage {
+    uint32_t structSize;
+    uint64_t totalUsageInBytes;
+    uint64_t aliasableUsageInBytes;
+} FfxVkPortableMemoryUsage;
 
 typedef enum FfxVkPortableResourceState {
     FFX_VK_PORTABLE_RESOURCE_STATE_UNDEFINED = 0,
@@ -289,6 +297,10 @@ FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
     const FfxVkPortableDeviceInfo* deviceInfo,
     const FfxVkPortableUpscaleCreateInfo* createInfo,
     FfxVkPortableUpscaleContext** context);
+
+FfxVkPortableResult ffxVkPortableUpscaleContextGetMemoryUsage(
+    FfxVkPortableUpscaleContext* context,
+    FfxVkPortableMemoryUsage* usage);
 
 /*
  * Record one upscaler dispatch into an already-recording primary or secondary

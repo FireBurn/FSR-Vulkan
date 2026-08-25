@@ -26,7 +26,10 @@ int main()
 
     /* Taking function addresses forces linker resolution of both SDK-2.3
      * reusable APIs without fabricating invalid Vulkan handles. */
+    auto fsr3_portable_memory = &ffxVkPortableUpscaleContextGetMemoryUsage;
     auto fsr3_create = &ffxVkFsr3_3_1_5UpscalerContextCreate;
+    auto fsr3_memory = &ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage;
     auto fi_create = &ffxVkFsr3_3_1_6FrameGenerationContextCreate;
-    return fsr3_create != nullptr && fi_create != nullptr ? 0 : 3;
+    return fsr3_portable_memory != nullptr && fsr3_create != nullptr &&
+           fsr3_memory != nullptr && fi_create != nullptr ? 0 : 3;
 }

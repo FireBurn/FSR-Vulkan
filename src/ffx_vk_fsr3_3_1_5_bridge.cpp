@@ -29,6 +29,10 @@ struct BridgeResource {
     VkImage image = VK_NULL_HANDLE;
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    /* Exact allocation size returned by Vulkan.  This makes the SDK's memory
+     * query describe the bridge's actual independent allocations instead of
+     * estimating texel footprints. */
+    VkDeviceSize allocationSize = 0u;
     VkImageView srvView = VK_NULL_HANDLE;
     std::vector<VkImageView> uavViews;
     VkMemoryPropertyFlags memoryProperties = 0u;
@@ -943,6 +947,7 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateResource(
         destroy_resource(bridge, resource.get());
         return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
     }
+    resource->allocationSize = requirements.size;
 
     if (resource->image != VK_NULL_HANDLE && !create_image_views(bridge, resource.get())) {
         destroy_resource(bridge, resource.get());
@@ -1008,6 +1013,28 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateResource(
             return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
         }
     }
+    return FFX_OK;
+}
+
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeGetEffectGpuMemoryUsage(
+    FfxInterface* backend, FfxUInt32, FfxApiEffectMemoryUsage* outUsage)
+{
+    FfxVkFsr3_3_1_5Bridge* bridge = bridge_from(backend);
+    if (!bridge || !outUsage)
+        return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_POINTER);
+
+    FfxApiEffectMemoryUsage usage{};
+    {
+        std::lock_guard<std::mutex> lock(bridge->mutex);
+        for (const std::unique_ptr<BridgeResource>& resource : bridge->resources) {
+            if (resource && resource->owned)
+                usage.totalUsageInBytes += resource->allocationSize;
+        }
+    }
+    /* The bridge deliberately gives every SDK-owned resource a distinct
+     * VkDeviceMemory allocation, so none is aliasable.  Imported images are
+     * caller-owned and intentionally absent. */
+    *outUsage = usage;
     return FFX_OK;
 }
 

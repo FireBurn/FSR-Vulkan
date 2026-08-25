@@ -948,6 +948,7 @@ int main()
             FfxVkFsr3_3_1_5UpscalerCreateInfo createInfo{};
             FfxVkFsr3_3_1_5UpscalerContext* portableContext = nullptr;
             FfxVkFsr3_3_1_5SharedResourceDescriptions shared{};
+            FfxVkFsr3_3_1_5MemoryUsage memoryUsage{};
             ExternalImage images[9]{};
             FfxVkFsr3_3_1_5Resource resources[9]{};
             VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -987,7 +988,12 @@ int main()
                         "get public SDK 3.1.5 bridge") ||
                 !expect(ffxVkFsr3_3_1_5UpscalerContextGetSharedResourceDescriptions(
                             portableContext, &shared) == FFX_VK_FSR3_3_1_5_OK,
-                        "get public SDK 3.1.5 shared resource descriptions")) {
+                        "get public SDK 3.1.5 shared resource descriptions") ||
+                !expect(ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage(
+                            portableContext, &memoryUsage) == FFX_VK_FSR3_3_1_5_OK &&
+                        memoryUsage.totalUsageInBytes > 0u &&
+                        memoryUsage.totalUsageInBytes >= memoryUsage.aliasableUsageInBytes,
+                        "get public SDK 3.1.5 memory usage")) {
                 cleanupPortable();
                 ffxVkFsr3_3_1_5DestroyBridge(bridge);
                 goto cleanup;

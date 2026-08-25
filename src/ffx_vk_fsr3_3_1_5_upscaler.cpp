@@ -40,6 +40,8 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateBackendContext(
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeDestroyBackendContext(FfxInterface*, FfxUInt32);
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeGetDeviceCapabilities(
     FfxInterface*, FfxDeviceCapabilities*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeGetEffectGpuMemoryUsage(
+    FfxInterface*, FfxUInt32, FfxApiEffectMemoryUsage*);
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeStageConstantBufferData(
     FfxInterface*, void*, FfxUInt32, FfxConstantBuffer*);
 
@@ -96,6 +98,7 @@ static void initialize_backend(FfxVkFsr3_3_1_5UpscalerContext* context)
     backend.fpCreateBackendContext = ffxVkFsr3_3_1_5BridgeCreateBackendContext;
     backend.fpDestroyBackendContext = ffxVkFsr3_3_1_5BridgeDestroyBackendContext;
     backend.fpGetDeviceCapabilities = ffxVkFsr3_3_1_5BridgeGetDeviceCapabilities;
+    backend.fpGetEffectGpuMemoryUsage = ffxVkFsr3_3_1_5BridgeGetEffectGpuMemoryUsage;
     backend.fpStageConstantBufferDataFunc = ffxVkFsr3_3_1_5BridgeStageConstantBufferData;
     backend.fpCreateResource = ffxVkFsr3_3_1_5BridgeCreateResource;
     backend.fpDestroyResource = ffxVkFsr3_3_1_5BridgeDestroyResource;
@@ -172,6 +175,22 @@ extern "C" FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextGetSharedResource
         export_description(shared.dilatedMotionVectors.resourceDescription);
     outDescriptions->reconstructedPrevNearestDepth =
         export_description(shared.reconstructedPrevNearestDepth.resourceDescription);
+    return FFX_VK_FSR3_3_1_5_OK;
+}
+
+extern "C" FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage(
+    FfxVkFsr3_3_1_5UpscalerContext* context,
+    FfxVkFsr3_3_1_5MemoryUsage* outUsage)
+{
+    if (!context || !context->created || !outUsage)
+        return FFX_VK_FSR3_3_1_5_ERROR_INVALID_ARGUMENT;
+    FfxApiEffectMemoryUsage usage{};
+    const FfxErrorCode result = ffxFsr3UpscalerContextGetGpuMemoryUsage(
+        &context->context, &usage);
+    if (result != FFX_OK)
+        return result_from_ffx(result);
+    outUsage->totalUsageInBytes = usage.totalUsageInBytes;
+    outUsage->aliasableUsageInBytes = usage.aliasableUsageInBytes;
     return FFX_VK_FSR3_3_1_5_OK;
 }
 

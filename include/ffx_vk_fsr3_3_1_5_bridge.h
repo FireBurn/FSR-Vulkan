@@ -96,6 +96,13 @@ typedef struct FfxVkFsr3_3_1_5SharedResourceDescriptions {
     FfxVkFsr3_3_1_5SharedResourceDescription reconstructedPrevNearestDepth;
 } FfxVkFsr3_3_1_5SharedResourceDescriptions;
 
+/* SDK-reported FSR3 effect allocation. It excludes application-imported
+ * temporal images, whose ownership remains with the caller. */
+typedef struct FfxVkFsr3_3_1_5MemoryUsage {
+    uint64_t totalUsageInBytes;
+    uint64_t aliasableUsageInBytes;
+} FfxVkFsr3_3_1_5MemoryUsage;
+
 /* An application-owned 2D image supplied to the SDK 3.1.5 scheduler.  The
  * caller retains VkImage and memory ownership.  `layout` must describe the
  * image at import time and will be restored after each scheduler dispatch;
@@ -157,6 +164,10 @@ FfxVkFsr3_3_1_5Bridge* ffxVkFsr3_3_1_5UpscalerContextGetBridge(
 FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextGetSharedResourceDescriptions(
     FfxVkFsr3_3_1_5UpscalerContext* context,
     FfxVkFsr3_3_1_5SharedResourceDescriptions* outDescriptions);
+
+FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage(
+    FfxVkFsr3_3_1_5UpscalerContext* context,
+    FfxVkFsr3_3_1_5MemoryUsage* outUsage);
 
 FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextRecordDispatch(
     FfxVkFsr3_3_1_5UpscalerContext* context,

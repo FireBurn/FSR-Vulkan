@@ -1350,6 +1350,16 @@ int main()
     FfxVkPortableUpscaleContext* portableContext = nullptr;
     const FfxVkPortableResult portableCreateResult = ffxVkPortableUpscaleContextCreate(
         &portableDevice, &portableDescription, &portableContext);
+    FfxVkPortableMemoryUsage portableMemoryUsage{};
+    portableMemoryUsage.structSize = sizeof(portableMemoryUsage);
+    const FfxVkPortableResult portableMemoryUsageResult =
+        portableCreateResult == FFX_VK_PORTABLE_OK
+            ? ffxVkPortableUpscaleContextGetMemoryUsage(portableContext, &portableMemoryUsage)
+            : portableCreateResult;
+    const bool portableMemoryUsageValid =
+        portableMemoryUsageResult == FFX_VK_PORTABLE_OK &&
+        portableMemoryUsage.totalUsageInBytes > 0u &&
+        portableMemoryUsage.totalUsageInBytes >= portableMemoryUsage.aliasableUsageInBytes;
     std::array<TestImage, 7> portableImportedImages{};
     std::array<TestImage, 7> portableSecondImportedImages{};
     std::uint64_t portableOutputHash = 0;
@@ -1457,7 +1467,8 @@ int main()
     if (!creationComplete || !dispatchComplete || !destroyComplete ||
         !disabledOptionalCapabilitiesSuppressed ||
         !missingStorageWriteFeatureRejected ||
-        portableCreateResult != FFX_VK_PORTABLE_OK || !portableFirstDispatchComplete ||
+        portableCreateResult != FFX_VK_PORTABLE_OK || !portableMemoryUsageValid ||
+        !portableFirstDispatchComplete ||
         !portableSecondDispatchComplete ||
         portableDestroyResult != FFX_VK_PORTABLE_OK ||
         frameGenerationCreateResult != FFX_VK_PORTABLE_OK ||

@@ -536,6 +536,28 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
     return FFX_VK_PORTABLE_OK;
 }
 
+extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextGetMemoryUsage(
+    FfxVkPortableUpscaleContext* context,
+    FfxVkPortableMemoryUsage* usage)
+{
+    if (context == nullptr || usage == nullptr)
+        return FFX_VK_PORTABLE_ERROR_INVALID_POINTER;
+    if (usage->structSize < sizeof(*usage))
+        return FFX_VK_PORTABLE_ERROR_INVALID_STRUCT_SIZE;
+    if (context->magic != kContextMagic || !context->ffxContextCreated)
+        return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
+
+    std::lock_guard<std::mutex> lock(context->mutex);
+    FfxEffectMemoryUsage ffxUsage{};
+    const FfxErrorCode result = ffxFsr3UpscalerContextGetGpuMemoryUsage(
+        &context->ffxContext, &ffxUsage);
+    if (result != FFX_OK)
+        return fromFfxResult(result);
+    usage->totalUsageInBytes = ffxUsage.totalUsageInBytes;
+    usage->aliasableUsageInBytes = ffxUsage.aliasableUsageInBytes;
+    return FFX_VK_PORTABLE_OK;
+}
+
 extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextRecordDispatch(
     FfxVkPortableUpscaleContext* context,
     const FfxVkPortableUpscaleDispatchInfo* dispatchInfo)
