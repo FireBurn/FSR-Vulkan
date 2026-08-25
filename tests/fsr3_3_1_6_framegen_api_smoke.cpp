@@ -384,6 +384,13 @@ int main()
             std::fprintf(stderr, "FSR3.1.6 public FI/OF create result: %d\n", (int)createResult);
         if (!expect(createResult == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK, "create public FI/OF context"))
             goto cleanup;
+        FfxVkFsr3_3_1_6FrameGenerationMemoryUsage memoryUsage{};
+        if (!expect(ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage(
+                        context, &memoryUsage) == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK &&
+                    memoryUsage.totalUsageInBytes > 0u &&
+                    memoryUsage.totalUsageInBytes >= memoryUsage.aliasableUsageInBytes,
+                    "get public FI/OF memory usage"))
+            goto cleanup;
     }
     {
         VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};

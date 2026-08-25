@@ -195,6 +195,15 @@ void ffxVkFsr3_3_1_5UpscalerContextDestroy(
 typedef struct FfxVkFsr3_3_1_6FrameGenerationContext
     FfxVkFsr3_3_1_6FrameGenerationContext;
 
+/* Resident allocation owned by the consolidated FI/OF lifecycle. This includes
+ * SDK-owned bridge resources and its five shared Vulkan images, but excludes
+ * every imported application frame image. The bridge intentionally does no
+ * Vulkan heap aliasing, so aliasableUsageInBytes is zero. */
+typedef struct FfxVkFsr3_3_1_6FrameGenerationMemoryUsage {
+    uint64_t totalUsageInBytes;
+    uint64_t aliasableUsageInBytes;
+} FfxVkFsr3_3_1_6FrameGenerationMemoryUsage;
+
 typedef enum FfxVkFsr3_3_1_6FrameGenerationResult {
     FFX_VK_FSR3_3_1_6_FRAMEGEN_OK = 0,
     FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT = -1,
@@ -287,6 +296,11 @@ FfxVkFsr3_3_1_6FrameGenerationResult
 ffxVkFsr3_3_1_6FrameGenerationContextCreate(
     const FfxVkFsr3_3_1_6FrameGenerationCreateInfo* createInfo,
     FfxVkFsr3_3_1_6FrameGenerationContext** outContext);
+
+FfxVkFsr3_3_1_6FrameGenerationResult
+ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage(
+    FfxVkFsr3_3_1_6FrameGenerationContext* context,
+    FfxVkFsr3_3_1_6FrameGenerationMemoryUsage* outUsage);
 
 FfxVkFsr3_3_1_6FrameGenerationResult
 ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(

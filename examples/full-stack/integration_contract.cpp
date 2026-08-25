@@ -30,6 +30,7 @@ int main()
     auto fsr3_create = &ffxVkFsr3_3_1_5UpscalerContextCreate;
     auto fsr3_memory = &ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage;
     auto fi_create = &ffxVkFsr3_3_1_6FrameGenerationContextCreate;
+    auto fi_memory = &ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage;
     return fsr3_portable_memory != nullptr && fsr3_create != nullptr &&
-           fsr3_memory != nullptr && fi_create != nullptr ? 0 : 3;
+           fsr3_memory != nullptr && fi_create != nullptr && fi_memory != nullptr ? 0 : 3;
 }

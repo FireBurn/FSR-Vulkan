@@ -41,6 +41,8 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateBackendContext(
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeDestroyBackendContext(FfxInterface*, FfxUInt32);
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeGetDeviceCapabilities(
     FfxInterface*, FfxDeviceCapabilities*);
+extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeGetEffectGpuMemoryUsage(
+    FfxInterface*, FfxUInt32, FfxApiEffectMemoryUsage*);
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeStageConstantBufferData(
     FfxInterface*, void*, FfxUInt32, FfxConstantBuffer*);
 extern "C" FfxApiResource ffxVkFsr3_3_1_5BridgeResolveResource(
@@ -51,6 +53,7 @@ namespace {
 struct OwnedSharedImage {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize allocationSize = 0u;
     FfxVkFsr3_3_1_5Resource imported{};
     FfxApiResource resource{};
 };
@@ -145,6 +148,7 @@ static bool make_shared_image(VkPhysicalDevice physicalDevice, VkDevice device,
                      (int)format, requirements.memoryTypeBits);
         return false;
     }
+    outImage->allocationSize = requirements.size;
     FfxVkFsr3_3_1_5ImportedImageDescription imported{};
     imported.image = outImage->image;
     imported.format = format;
@@ -186,6 +190,7 @@ static void initialize_backend(FfxInterface* backend, FfxVkFsr3_3_1_5Bridge* bri
     backend->fpCreateBackendContext = ffxVkFsr3_3_1_5BridgeCreateBackendContext;
     backend->fpDestroyBackendContext = ffxVkFsr3_3_1_5BridgeDestroyBackendContext;
     backend->fpGetDeviceCapabilities = ffxVkFsr3_3_1_5BridgeGetDeviceCapabilities;
+    backend->fpGetEffectGpuMemoryUsage = ffxVkFsr3_3_1_5BridgeGetEffectGpuMemoryUsage;
     backend->fpStageConstantBufferDataFunc = ffxVkFsr3_3_1_5BridgeStageConstantBufferData;
     backend->fpCreateResource = ffxVkFsr3_3_1_5BridgeCreateResource;
     backend->fpDestroyResource = ffxVkFsr3_3_1_5BridgeDestroyResource;
@@ -372,6 +377,30 @@ ffxVkFsr3_3_1_6FrameGenerationContextCreate(
         return result_from_ffx(result);
     }
     *outContext = context;
+    return FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
+}
+
+extern "C" FfxVkFsr3_3_1_6FrameGenerationResult
+ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage(
+    FfxVkFsr3_3_1_6FrameGenerationContext* context,
+    FfxVkFsr3_3_1_6FrameGenerationMemoryUsage* outUsage)
+{
+    if (!context || !outUsage || !context->opticalFlowCreated ||
+        !context->interpolationCreated || !context->backend.fpGetEffectGpuMemoryUsage)
+        return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
+
+    FfxApiEffectMemoryUsage bridgeUsage{};
+    const FfxErrorCode result = context->backend.fpGetEffectGpuMemoryUsage(
+        &context->backend, 0u, &bridgeUsage);
+    if (result != FFX_OK)
+        return result_from_ffx(result);
+
+    const uint64_t sharedUsage = context->opticalFlowVector.allocationSize +
+        context->opticalFlowScd.allocationSize + context->dilatedDepth.allocationSize +
+        context->dilatedMotionVectors.allocationSize +
+        context->reconstructedPreviousDepth.allocationSize;
+    outUsage->totalUsageInBytes = bridgeUsage.totalUsageInBytes + sharedUsage;
+    outUsage->aliasableUsageInBytes = bridgeUsage.aliasableUsageInBytes;
     return FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
 }
 

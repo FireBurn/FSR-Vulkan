@@ -304,6 +304,12 @@ each SDK resource a separate `VkDeviceMemory` allocation, so its aliasable
 total is accurately zero. `FFX_VK_PORTABLE_ABI_VERSION` is 2 for this additive
 portable API revision.
 
+The FSR3.1.6 analytical frame-generation lifecycle similarly exposes
+`ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage`. Its total is deliberately
+consolidated: optical flow and frame interpolation share one bridge, so adding
+their individual SDK queries would double-count that backend. It includes the
+five lifecycle-owned shared images and excludes imported application frames.
+
 The pinned backend retains dynamic external-image views for eight effect calls
 rather than the upstream four. This is intentional: analytical frame
 interpolation records a preparation workload and a generation workload for one
