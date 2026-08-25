@@ -16,7 +16,7 @@ extern "C" {
  * It does not contain AMD neural kernels or an RR dispatch implementation.
  * Hosts can use it to validate their signals before attaching a legally
  * available provider on a supported platform. */
-#define FFX_VK_RAYREGENERATION_CONTRACT_VERSION 2u
+#define FFX_VK_RAYREGENERATION_CONTRACT_VERSION 3u
 
 typedef enum FfxVkRayRegenerationSignalFlagBits {
     FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE = 1u << 0,
@@ -73,10 +73,12 @@ typedef struct FfxVkRayRegenerationInputs {
     FfxVkPortableImage specularAlbedo;
 
     /* Camera metadata follows Vulkan column-major / column-vector convention.
-     * Motion vectors are scaled before use; jitter is current-frame jitter in
-     * render-pixel units. Depth bounds describe the positive ray-tracing
-     * range, even though linearDepth may hold signed virtual-reflection depth. */
-    FfxVkPortableFloat2 motionVectorScale;
+     * Motion vectors are scaled before use: XY to UV and Z to signed-linear
+     * depth-delta space. Jitter is current-frame jitter in render-pixel units.
+     * cameraPositionDelta is previous position minus current position in world
+     * space. Depth bounds describe the positive ray-tracing range, even though
+     * linearDepth may hold signed virtual-reflection depth. */
+    FfxVkPortableFloat3 motionVectorScale;
     FfxVkPortableFloat2 jitterOffset;
     FfxVkPortableFloat3 cameraPositionDelta;
     float view[16];

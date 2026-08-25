@@ -96,7 +96,7 @@ FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
         VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_UNDEFINED, &result);
     image_is_readable(&inputs->specularAlbedo, inputs->renderSize,
         VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_UNDEFINED, &result);
-    if (!finite_float2(inputs->motionVectorScale) ||
+    if (!finite_float3(inputs->motionVectorScale) ||
         !finite_float2(inputs->jitterOffset) ||
         !finite_float3(inputs->cameraPositionDelta) ||
         !finite_matrix(inputs->view) || !finite_matrix(inputs->projection) ||
@@ -104,6 +104,7 @@ FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
         result |= FFX_VK_RR_VALIDATION_NONFINITE_METADATA;
     if (inputs->motionVectorScale.x == 0.0f ||
         inputs->motionVectorScale.y == 0.0f ||
+        inputs->motionVectorScale.z == 0.0f ||
         inputs->linearDepthMin < 0.0f ||
         inputs->linearDepthMax <= inputs->linearDepthMin)
         result |= FFX_VK_RR_VALIDATION_CAMERA_METADATA;

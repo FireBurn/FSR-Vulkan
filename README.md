@@ -172,7 +172,10 @@ toward the shaded target (matching AMD RR); an `R16_SFLOAT` value of FP16_MAX
 means fully exposed. A renderer whose shadow ray instead points from the
 surface to its emitter must negate that vector at this boundary. The
 camera-position delta must be supplied directly by the renderer, rather than
-reconstructed from view matrices.
+reconstructed from view matrices. Its convention is previous position minus
+current position. Motion-vector scale has three components: XY transforms
+motion into UV space and Z transforms the previous-minus-current signed-linear
+depth delta; all three must be nonzero.
 
 The FSR4-v07 provider also has an explicit three-frame Vulkan lifetime:
 call `ffxFsr4VkBeginFrame(&interface, frame_id)` before each provider dispatch,

@@ -37,7 +37,7 @@ int main(void) {
     inputs.normalsRoughnessMaterial = image(VK_FORMAT_R8G8B8A8_UNORM);
     inputs.diffuseAlbedo = image(VK_FORMAT_R8G8B8A8_UNORM);
     inputs.specularAlbedo = image(VK_FORMAT_R8G8B8A8_UNORM);
-    inputs.motionVectorScale = (FfxVkPortableFloat2){ 1.0f, 1.0f };
+    inputs.motionVectorScale = (FfxVkPortableFloat3){ 1.0f, 1.0f, 1.0f };
     identity(inputs.view);
     identity(inputs.projection);
     inputs.linearDepthMin = 0.0f;
