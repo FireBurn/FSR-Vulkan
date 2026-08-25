@@ -118,6 +118,28 @@ else()
     target_compile_options(ffx_vulkan_portable PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Provider-neutral validation for Ray Regeneration-style decoupled denoisers.
+# This is an input contract only; AMD's signed neural RR provider remains a
+# separate DX12/RDNA4 runtime.
+add_library(ffx_vulkan_rayregeneration_contract STATIC
+    src/ffx_vk_rayregeneration_contract.c)
+add_library(ffx-vulkan::rayregeneration-contract ALIAS
+    ffx_vulkan_rayregeneration_contract)
+set_property(TARGET ffx_vulkan_rayregeneration_contract PROPERTY
+    EXPORT_NAME rayregeneration-contract)
+target_compile_features(ffx_vulkan_rayregeneration_contract PUBLIC c_std_11)
+target_include_directories(ffx_vulkan_rayregeneration_contract PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+target_link_libraries(ffx_vulkan_rayregeneration_contract
+    PUBLIC ffx-vulkan::portable)
+if(MSVC)
+    target_compile_options(ffx_vulkan_rayregeneration_contract PRIVATE /W4)
+else()
+    target_compile_options(ffx_vulkan_rayregeneration_contract PRIVATE
+        -Wall -Wextra -Wpedantic)
+endif()
+
 if(FFX_VK_PORTABLE_BUILD_FSR3_HOST)
     set(FFX_1_1_4_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/upstream/ffx-1.1.4/sdk")
     add_library(ffx_vulkan_fsr3_host_1_1_4 STATIC
@@ -472,6 +494,7 @@ add_library(ffx-vulkan::effects ALIAS ffx_vulkan_effects)
 set_property(TARGET ffx_vulkan_effects PROPERTY EXPORT_NAME effects)
 target_link_libraries(ffx_vulkan_effects INTERFACE
     ffx-vulkan::portable
+    ffx-vulkan::rayregeneration-contract
     ffx-vulkan::fsr4-v07-assets
     ffx-vulkan::framegeneration-presenter-policy)
 if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
@@ -497,6 +520,7 @@ if(FFX_VK_PORTABLE_INSTALL)
     # headers and Vulkan; they do not need Q2RTX or a source-tree path.
     set(FFX_VK_PORTABLE_INSTALL_TARGETS
         ffx_vulkan_portable
+        ffx_vulkan_rayregeneration_contract
         ffx_vulkan_fsr4_v07_assets
         ffx_vulkan_framegeneration_presenter_policy
         ffx_vulkan_effects)
@@ -544,6 +568,13 @@ endif()
 
 if(FFX_VK_PORTABLE_BUILD_TESTS)
     enable_testing()
+
+    add_executable(ffx_vk_rayregeneration_contract_test
+        tests/rayregeneration_contract_test.c)
+    target_link_libraries(ffx_vk_rayregeneration_contract_test PRIVATE
+        ffx-vulkan::rayregeneration-contract)
+    add_test(NAME ffx_vk_rayregeneration_contract
+        COMMAND ffx_vk_rayregeneration_contract_test)
 
     add_test(NAME ffx_vk_fsr3_vendored_hashes
         COMMAND "${CMAKE_COMMAND}"

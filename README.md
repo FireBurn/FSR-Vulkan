@@ -32,6 +32,10 @@ The API keeps these independently selectable pieces behind one contract:
    available, while a complete callback API is pending.
 4. The source-v07 FSR4 provider using the same Vulkan resource and temporal
    input types.
+5. `ffx-vulkan::rayregeneration-contract`, a provider-neutral validator for
+   Ray-Regeneration-style depth, motion, material, noisy-radiance, hit-distance,
+   and optional dominant-light inputs. It is deliberately not a neural
+   denoiser or a claim that a signed AMD RR provider is available.
 
 The presenter will use an explicit API rather than impersonating a Vulkan
 swapchain handle.  That makes queue ownership and synchronization visible and
@@ -102,6 +106,7 @@ For all FSR3 paths, either vendor this directory (including `upstream/` and
 add_subdirectory(extern/ffx-vulkan)
 target_link_libraries(my_renderer PRIVATE
     ffx-vulkan::portable
+    ffx-vulkan::rayregeneration-contract
     ffx-vulkan::fsr3-vk-framegeneration-3.1.6
     ffx-vulkan::framegeneration-presenter-policy
     ffx-vulkan::fsr4-v07-vulkan)
@@ -140,6 +145,19 @@ The application retains instance/device/queue/swapchain ownership. It records
 FSR3 or FSR4 work in its own command buffer, keeps imported images alive until
 its frame fence signals, and composes UI after interpolation. The FSR3 public
 headers document the exact resource/layout and fence-retirement contracts.
+
+### Ray Regeneration input contract
+
+`ffx-vulkan::rayregeneration-contract` is a lightweight C validator intended
+for a renderer's pre-provider integration check. Populate
+`FfxVkRayRegenerationInputs` with sampled image metadata plus the required
+motion-vector scale, jitter, camera delta, view/projection matrices, and depth
+bounds, then call `ffxVkRayRegenerationValidateInputs`. The returned issue-bit
+mask identifies incompatible extent, format, usage/state, alpha semantic, or
+camera/dominant-light metadata before a provider is allowed to consume it.
+It does not inspect GPU pixels, create a Vulkan context, record commands, or
+include an AMD Ray Regeneration binary. Those are intentionally separate host
+and provider responsibilities.
 
 The FSR4-v07 provider also has an explicit three-frame Vulkan lifetime:
 call `ffxFsr4VkBeginFrame(&interface, frame_id)` before each provider dispatch,

@@ -8,6 +8,7 @@
 #include <ffx_vk_fsr4_v07_assets.h>
 #include <ffx_vk_framegeneration_presenter.h>
 #include <ffx_vk_portable.h>
+#include <ffx_vk_rayregeneration_contract.h>
 
 int main()
 {
@@ -31,6 +32,8 @@ int main()
     auto fsr3_memory = &ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage;
     auto fi_create = &ffxVkFsr3_3_1_6FrameGenerationContextCreate;
     auto fi_memory = &ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage;
+    auto rr_validate = &ffxVkRayRegenerationValidateInputs;
     return fsr3_portable_memory != nullptr && fsr3_create != nullptr &&
-           fsr3_memory != nullptr && fi_create != nullptr && fi_memory != nullptr ? 0 : 3;
+           fsr3_memory != nullptr && fi_create != nullptr && fi_memory != nullptr &&
+           rr_validate != nullptr ? 0 : 3;
 }
