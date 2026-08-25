@@ -12,7 +12,8 @@ Opaque public C APIs create, destroy, and record upscaling plus frame-generation
 work without exposing an AMD type. The generated Vulkan shader tables are
 checked in with manifests. Q2RTX supplies a validation-tested two-acquire,
 generated-then-real reference presenter; extracting that WSI policy as a
-general-purpose standalone API remains future work.
+general-purpose standalone policy library is complete, while a full generic
+acquire/submit callback API remains future work.
 
 ## Design boundary
 
@@ -27,7 +28,8 @@ The API keeps these independently selectable pieces behind one contract:
 1. FSR 3 temporal upscaling.
 2. FSR 3 analytical frame interpolation, including optical flow.
 3. A Q2RTX reference presenter that schedules real and generated frames and
-   composes UI after interpolation; its reusable WSI API extraction is pending.
+   composes UI after interpolation; its reusable WSI policy library is
+   available, while a complete callback API is pending.
 4. The source-v07 FSR4 provider using the same Vulkan resource and temporal
    input types.
 
@@ -84,6 +86,13 @@ AMD SDK/DLL's unversioned FFX exports. `FfxFsr4V07CreateContext` copies the
 explicit `FfxInterface` installed by `ffxFsr4V07SetBackendInterface`; no
 renderer global is required. It is the same target Q2RTX links.
 
+`ffx-vulkan::framegeneration-presenter-policy` is the reusable WSI policy
+layer used by Q2RTX. It does not acquire or present images for the application;
+instead it codifies FIFO selection for generated→real pairs, `minImageCount +
+2` requirements, pair validation, and image/GPU semaphore ownership. This
+keeps platform windowing and queue submission in the host while avoiding the
+common binary-semaphore and Mailbox/Immediate mistakes.
+
 ## Use in another Vulkan project
 
 For all FSR3 paths, vendor this directory (including `upstream/` and
@@ -94,6 +103,7 @@ add_subdirectory(extern/ffx-vulkan)
 target_link_libraries(my_renderer PRIVATE
     ffx-vulkan::portable
     ffx-vulkan::fsr3-vk-framegeneration-3.1.6
+    ffx-vulkan::framegeneration-presenter-policy
     ffx-vulkan::fsr4-v07-vulkan)
 ```
 

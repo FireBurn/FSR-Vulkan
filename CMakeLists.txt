@@ -43,6 +43,27 @@ else()
     target_compile_options(ffx_vulkan_fsr4_v07_assets PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# The policy is intentionally smaller than a swapchain wrapper: it lets an
+# application retain ownership of platform WSI while sharing the invariants
+# required for a generated-then-real presentation pair.
+add_library(ffx_vulkan_framegeneration_presenter_policy STATIC
+    src/ffx_vk_framegeneration_presenter.c)
+add_library(ffx-vulkan::framegeneration-presenter-policy ALIAS
+    ffx_vulkan_framegeneration_presenter_policy)
+set_property(TARGET ffx_vulkan_framegeneration_presenter_policy PROPERTY
+    EXPORT_NAME framegeneration-presenter-policy)
+target_compile_features(ffx_vulkan_framegeneration_presenter_policy PUBLIC c_std_11)
+target_include_directories(ffx_vulkan_framegeneration_presenter_policy PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+target_link_libraries(ffx_vulkan_framegeneration_presenter_policy PUBLIC Vulkan::Vulkan)
+if(MSVC)
+    target_compile_options(ffx_vulkan_framegeneration_presenter_policy PRIVATE /W4)
+else()
+    target_compile_options(ffx_vulkan_framegeneration_presenter_policy PRIVATE
+        -Wall -Wextra -Wpedantic)
+endif()
+
 if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
     add_library(ffx_vulkan_fsr4_v07_vulkan STATIC
         src/ffx_vk_fsr4_v07.c
@@ -101,7 +122,8 @@ if(FFX_VK_PORTABLE_INSTALL)
     include(GNUInstallDirs)
 
     set(FFX_VK_PORTABLE_INSTALL_TARGETS
-        ffx_vulkan_fsr4_v07_assets)
+        ffx_vulkan_fsr4_v07_assets
+        ffx_vulkan_framegeneration_presenter_policy)
     if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
         list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
             ffx_vulkan_fsr4_v07_vulkan)
@@ -760,6 +782,13 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
     target_link_libraries(ffx_vk_fsr4_v07_assets_test PRIVATE
         ffx-vulkan::fsr4-v07-assets)
     add_test(NAME ffx_vk_fsr4_v07_assets_test COMMAND ffx_vk_fsr4_v07_assets_test)
+
+    add_executable(ffx_vk_framegeneration_presenter_policy_test
+        tests/framegeneration_presenter_policy_test.c)
+    target_link_libraries(ffx_vk_framegeneration_presenter_policy_test PRIVATE
+        ffx-vulkan::framegeneration-presenter-policy)
+    add_test(NAME ffx_vk_framegeneration_presenter_policy_test
+        COMMAND ffx_vk_framegeneration_presenter_policy_test)
 
     if(FFX_VK_PORTABLE_BUILD_FSR3_HOST)
         add_executable(ffx_vk_fsr3_host_test tests/fsr3_host_test.cpp)

@@ -5,6 +5,7 @@
  */
 #include <ffx_vk_fsr4_v07.h>
 #include <ffx_vk_fsr4_v07_assets.h>
+#include <ffx_vk_framegeneration_presenter.h>
 
 int main(void)
 {
@@ -19,6 +20,12 @@ int main(void)
     if (!ffxFsr4V07BuildAssetSet(FFX_FSR4_MODEL_PRESET_QUALITY,
                                  1920u, 1080u, &fsr4_assets))
         return 1;
+
+    /* Keep WSI ownership in the host while sharing generated→real invariants. */
+    if (ffxVkFrameGenerationRequiredImageCount(3u, true) != 5u ||
+        !ffxVkFrameGenerationValidateAcquiredPair(0u, 1u, 5u) ||
+        ffxVkFrameGenerationRenderFinishedSemaphoreIndex(1u, 0u, 1u) != 1u)
+        return 2;
 
     /* Context creation copies the caller's interface; no Q2RTX global exists. */
     ffxFsr4V07SetBackendInterface(&interface);
