@@ -17,6 +17,14 @@ static FfxVkPortableImage image(VkFormat format) {
     };
 }
 
+static FfxVkPortableImage writable_image(VkFormat format) {
+    FfxVkPortableImage result = image(format);
+    result.image = (VkImage)(uintptr_t)2;
+    result.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    result.state = FFX_VK_PORTABLE_RESOURCE_STATE_UNORDERED_ACCESS;
+    return result;
+}
+
 static void identity(float matrix[16]) {
     unsigned int i;
     for (i = 0; i < 16; ++i)
@@ -25,6 +33,7 @@ static void identity(float matrix[16]) {
 
 int main(void) {
     FfxVkRayRegenerationInputs inputs;
+	FfxVkRayRegenerationOutputs outputs;
     uint64_t issues = 0;
     memset(&inputs, 0, sizeof(inputs));
     inputs.structSize = sizeof(inputs);
@@ -51,6 +60,21 @@ int main(void) {
         FFX_VK_PORTABLE_OK);
     assert(issues == FFX_VK_RR_VALIDATION_NONE);
 
+	memset(&outputs, 0, sizeof(outputs));
+	outputs.structSize = sizeof(outputs);
+	outputs.contractVersion = FFX_VK_RAYREGENERATION_CONTRACT_VERSION;
+	outputs.directDiffuse = writable_image(VK_FORMAT_R16G16B16A16_SFLOAT);
+	outputs.indirectDiffuse = writable_image(VK_FORMAT_R16G16B16A16_SFLOAT);
+	assert(ffxVkRayRegenerationValidateOutputs(&inputs, &outputs, &issues) ==
+		FFX_VK_PORTABLE_OK);
+	assert(issues == FFX_VK_RR_VALIDATION_NONE);
+
+	outputs.indirectDiffuse.format = VK_FORMAT_R8_UNORM;
+	assert(ffxVkRayRegenerationValidateOutputs(&inputs, &outputs, &issues) ==
+		FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
+	assert((issues & FFX_VK_RR_VALIDATION_OUTPUT_IMAGE) != 0);
+	outputs.indirectDiffuse = writable_image(VK_FORMAT_R16G16B16A16_SFLOAT);
+
     inputs.indirectDiffuse.format = VK_FORMAT_R8_UNORM;
     assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
         FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
@@ -68,6 +92,20 @@ int main(void) {
     assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
         FFX_VK_PORTABLE_OK);
     assert(issues == FFX_VK_RR_VALIDATION_NONE);
+
+	inputs.checkerboardSignalFlags = FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE;
+	inputs.checkerboardOriginBits = FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE;
+	inputs.directDiffuse.extent.width = 480;
+	assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
+		FFX_VK_PORTABLE_OK);
+	assert(issues == FFX_VK_RR_VALIDATION_NONE);
+	inputs.checkerboardOriginBits = FFX_VK_RR_SIGNAL_INDIRECT_DIFFUSE;
+	assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
+		FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
+	assert((issues & FFX_VK_RR_VALIDATION_CHECKERBOARD) != 0);
+	inputs.checkerboardSignalFlags = 0;
+	inputs.checkerboardOriginBits = 0;
+	inputs.directDiffuse.extent.width = 960;
 
     inputs.signalFlags = FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE |
         FFX_VK_RR_SIGNAL_SPECULAR_OCCLUSION;

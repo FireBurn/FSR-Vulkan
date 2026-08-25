@@ -16,7 +16,7 @@ extern "C" {
  * It does not contain AMD neural kernels or an RR dispatch implementation.
  * Hosts can use it to validate their signals before attaching a legally
  * available provider on a supported platform. */
-#define FFX_VK_RAYREGENERATION_CONTRACT_VERSION 3u
+#define FFX_VK_RAYREGENERATION_CONTRACT_VERSION 4u
 
 typedef enum FfxVkRayRegenerationSignalFlagBits {
     FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE = 1u << 0,
@@ -53,13 +53,21 @@ typedef enum FfxVkRayRegenerationValidationIssueBits {
     FFX_VK_RR_VALIDATION_DOMINANT_LIGHT = 1ull << 9,
     FFX_VK_RR_VALIDATION_NONFINITE_METADATA = 1ull << 10,
     FFX_VK_RR_VALIDATION_CAMERA_METADATA = 1ull << 11,
-    FFX_VK_RR_VALIDATION_SIGNAL_FLAGS = 1ull << 12
+    FFX_VK_RR_VALIDATION_SIGNAL_FLAGS = 1ull << 12,
+    FFX_VK_RR_VALIDATION_CHECKERBOARD = 1ull << 13,
+    FFX_VK_RR_VALIDATION_OUTPUT_IMAGE = 1ull << 14
 } FfxVkRayRegenerationValidationIssueBits;
 
 typedef struct FfxVkRayRegenerationInputs {
     uint32_t structSize;
     uint32_t contractVersion;
     uint32_t signalFlags;
+    /* Checkerboard signals must be a subset of signalFlags. A set bit in
+     * checkerboardOriginBits selects X=1 as the first traced pixel at Y=0;
+     * clear selects X=0. Bits outside checkerboardSignalFlags must be clear.
+     * Their input images are half-width, while all other inputs are full size. */
+    uint32_t checkerboardSignalFlags;
+    uint32_t checkerboardOriginBits;
     FfxVkPortableExtent2D renderSize;
 
     /* R32_SFLOAT signed linear depth and RGBA16F motion where XYZ encode
@@ -108,8 +116,31 @@ typedef struct FfxVkRayRegenerationInputs {
     float dominantLightAngularRadius;
 } FfxVkRayRegenerationInputs;
 
+/* Output bindings for one provider dispatch. Each active signal needs its
+ * matching output format at full render extent. An output may alias its input;
+ * in that case the input image must also carry STORAGE usage and the provider
+ * owns the in-dispatch read/write transition. Non-aliased output state must be
+ * UNORDERED_ACCESS. This remains a validation contract, not a dispatch API. */
+typedef struct FfxVkRayRegenerationOutputs {
+    uint32_t structSize;
+    uint32_t contractVersion;
+    FfxVkPortableImage directDiffuse;
+    FfxVkPortableImage directSpecular;
+    FfxVkPortableImage indirectDiffuse;
+    FfxVkPortableImage indirectSpecular;
+    FfxVkPortableImage ambientOcclusion;
+    FfxVkPortableImage specularOcclusion;
+    /* Dominant-light input is R16_SFLOAT hit distance; output is R8_UNORM
+     * visibility in [0, 1]. */
+    FfxVkPortableImage dominantLightVisibility;
+} FfxVkRayRegenerationOutputs;
+
 FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
     const FfxVkRayRegenerationInputs* inputs, uint64_t* issues);
+
+FfxVkPortableResult ffxVkRayRegenerationValidateOutputs(
+    const FfxVkRayRegenerationInputs* inputs,
+    const FfxVkRayRegenerationOutputs* outputs, uint64_t* issues);
 
 #if defined(__cplusplus)
 }

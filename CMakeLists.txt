@@ -119,8 +119,8 @@ else()
 endif()
 
 # Provider-neutral validation for Ray Regeneration-style decoupled denoisers.
-# This is an input contract only; AMD's signed neural RR provider remains a
-# separate DX12/RDNA4 runtime.
+# It validates provider inputs and output/checkerboard dispatch bindings, but
+# AMD's signed neural RR provider remains a separate DX12/RDNA4 runtime.
 add_library(ffx_vulkan_rayregeneration_contract STATIC
     src/ffx_vk_rayregeneration_contract.c)
 add_library(ffx-vulkan::rayregeneration-contract ALIAS

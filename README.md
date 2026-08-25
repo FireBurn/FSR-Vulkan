@@ -159,6 +159,15 @@ It does not inspect GPU pixels, create a Vulkan context, record commands, or
 include an AMD Ray Regeneration binary. Those are intentionally separate host
 and provider responsibilities.
 
+Before recording a provider dispatch, populate matching full-resolution
+`FfxVkRayRegenerationOutputs` and call
+`ffxVkRayRegenerationValidateOutputs`. It validates the R8/RGBA16F output
+formats, storage usage/state, and permits documented in-place input/output
+aliasing. Inputs can declare checkerboard reconstruction with a selected-signal
+subset and per-signal origin bits; checkerboard inputs have a half-width active
+pixel region while outputs remain full resolution. This is a concrete hand-off
+contract for a provider, not a substitute provider implementation.
+
 The contract models all seven independent RR-style signal inputs: direct and
 indirect diffuse/specular radiance, dominant-light visibility, ambient
 occlusion, and specular occlusion. The scalar occlusion signals are R8_UNORM
