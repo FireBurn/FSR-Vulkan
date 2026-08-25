@@ -68,6 +68,27 @@ else()
         -Wall -Wextra -Wpedantic)
 endif()
 
+# A common, testable reset decision keeps an application's upscaler, denoiser,
+# and frame generator from disagreeing about camera discontinuities.
+add_library(ffx_vulkan_temporal_lifecycle STATIC
+    src/ffx_vk_temporal_lifecycle.c)
+add_library(ffx-vulkan::temporal-lifecycle ALIAS ffx_vulkan_temporal_lifecycle)
+set_property(TARGET ffx_vulkan_temporal_lifecycle PROPERTY
+    EXPORT_NAME temporal-lifecycle)
+target_compile_features(ffx_vulkan_temporal_lifecycle PUBLIC c_std_11)
+target_include_directories(ffx_vulkan_temporal_lifecycle PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(ffx_vulkan_temporal_lifecycle PUBLIC m)
+endif()
+if(MSVC)
+    target_compile_options(ffx_vulkan_temporal_lifecycle PRIVATE /W4)
+else()
+    target_compile_options(ffx_vulkan_temporal_lifecycle PRIVATE
+        -Wall -Wextra -Wpedantic)
+endif()
+
 if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
     add_library(ffx_vulkan_fsr4_v07_vulkan STATIC
         src/ffx_vk_fsr4_v07.c
@@ -500,7 +521,8 @@ target_link_libraries(ffx_vulkan_effects INTERFACE
     ffx-vulkan::portable
     ffx-vulkan::rayregeneration-contract
     ffx-vulkan::fsr4-v07-assets
-    ffx-vulkan::framegeneration-presenter-policy)
+    ffx-vulkan::framegeneration-presenter-policy
+    ffx-vulkan::temporal-lifecycle)
 if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
     target_link_libraries(ffx_vulkan_effects INTERFACE
         ffx-vulkan::fsr4-v07-vulkan)
@@ -574,6 +596,7 @@ if(FFX_VK_PORTABLE_INSTALL)
         ffx_vulkan_rayregeneration_contract
         ffx_vulkan_fsr4_v07_assets
         ffx_vulkan_framegeneration_presenter_policy
+        ffx_vulkan_temporal_lifecycle
         ffx_vulkan_effects)
     if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
         list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
@@ -626,6 +649,13 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         ffx-vulkan::rayregeneration-contract)
     add_test(NAME ffx_vk_rayregeneration_contract
         COMMAND ffx_vk_rayregeneration_contract_test)
+
+    add_executable(ffx_vk_temporal_lifecycle_test
+        tests/temporal_lifecycle_test.c)
+    target_link_libraries(ffx_vk_temporal_lifecycle_test PRIVATE
+        ffx-vulkan::temporal-lifecycle)
+    add_test(NAME ffx_vk_temporal_lifecycle
+        COMMAND ffx_vk_temporal_lifecycle_test)
 
     add_test(NAME ffx_vk_fsr3_vendored_hashes
         COMMAND "${CMAKE_COMMAND}"

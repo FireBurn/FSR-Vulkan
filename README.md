@@ -419,6 +419,11 @@ present.
   for an interpolated frame.
 - `reset` is required after camera cuts, seeks, map loads, resolution changes,
   or any discontinuity in those inputs.
+- `ffx-vulkan::temporal-lifecycle` provides the tested conservative camera-cut
+  classifier used by Q2RTX: a teleport over 256 application world units, turn
+  over 90 degrees, lens jump over 0.35 radians, or non-finite camera state.
+  Supply normalized forward vectors and forward its result as `reset` to every
+  temporal provider for that rendered frame.
 - FSR input color is linear scene color.  UI is supplied separately and
   composed after interpolation.
 

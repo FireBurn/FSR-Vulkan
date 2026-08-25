@@ -9,6 +9,7 @@
 #include <ffx_vk_framegeneration_presenter.h>
 #include <ffx_vk_portable.h>
 #include <ffx_vk_rayregeneration_contract.h>
+#include <ffx_vk_temporal_lifecycle.h>
 
 int main()
 {
@@ -33,7 +34,8 @@ int main()
     auto fi_create = &ffxVkFsr3_3_1_6FrameGenerationContextCreate;
     auto fi_memory = &ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage;
     auto rr_validate = &ffxVkRayRegenerationValidateInputs;
+    auto camera_cut = &ffxVkTemporalCameraCutDetected;
     return fsr3_portable_memory != nullptr && fsr3_create != nullptr &&
            fsr3_memory != nullptr && fi_create != nullptr && fi_memory != nullptr &&
-           rr_validate != nullptr ? 0 : 3;
+           rr_validate != nullptr && camera_cut != nullptr ? 0 : 3;
 }
