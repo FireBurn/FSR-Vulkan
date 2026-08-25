@@ -89,7 +89,8 @@ typedef struct FfxVkRayRegenerationInputs {
     float noHitDistance;
 
     /* Optional R16_SFLOAT dominant-light hit distance. FP16_MAX means fully
-     * exposed; direction is from source to target and angularRadius is radians. */
+     * exposed; direction is from the shaded point toward the emitter and
+     * angularRadius is radians. */
     FfxVkPortableImage dominantLightVisibility;
     FfxVkPortableFloat3 dominantLightDirection;
     FfxVkPortableFloat3 dominantLightEmission;
