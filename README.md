@@ -7,10 +7,12 @@ implementation can be reused by other Vulkan applications.
 Current status: the public C contract, validation layer, device capability
 probe, pinned AMD 1.1.4 host scheduler, native Vulkan FSR 3 Upscaler, and
 analytical Optical Flow/Frame Interpolation compute backends are implemented
-and tested. Opaque public C APIs create, destroy, and record upscaling plus
-frame-generation work without exposing an AMD type. The generated Vulkan
-shader tables are checked in with manifests. A portable presenter, Q2RTX frame
-integration, and the SDK 2.3 algorithm update remain future layers.
+and tested. The versioned source-v07 FSR4 INT8/DOT4 provider is also included.
+Opaque public C APIs create, destroy, and record upscaling plus frame-generation
+work without exposing an AMD type. The generated Vulkan shader tables are
+checked in with manifests. Q2RTX supplies a validation-tested two-acquire,
+generated-then-real reference presenter; extracting that WSI policy as a
+general-purpose standalone API remains future work.
 
 ## Design boundary
 
@@ -24,10 +26,10 @@ The API keeps these independently selectable pieces behind one contract:
 
 1. FSR 3 temporal upscaling.
 2. FSR 3 analytical frame interpolation, including optical flow.
-3. A portable presenter that schedules real and generated frames and composes
-   UI after interpolation.
-4. Future FSR 4 providers using the same Vulkan resource and temporal input
-   types.
+3. A Q2RTX reference presenter that schedules real and generated frames and
+   composes UI after interpolation; its reusable WSI API extraction is pending.
+4. The source-v07 FSR4 provider using the same Vulkan resource and temporal
+   input types.
 
 The presenter will use an explicit API rather than impersonating a Vulkan
 swapchain handle.  That makes queue ownership and synchronization visible and
