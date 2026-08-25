@@ -100,6 +100,7 @@ add_library(ffx_vulkan_portable STATIC
     src/ffx_vk_fsr3_3_1_5_descriptor.c
 )
 add_library(ffx-vulkan::portable ALIAS ffx_vulkan_portable)
+set_property(TARGET ffx_vulkan_portable PROPERTY EXPORT_NAME portable)
 
 target_compile_features(ffx_vulkan_portable PUBLIC c_std_11)
 target_include_directories(ffx_vulkan_portable
@@ -117,42 +118,6 @@ else()
     target_compile_options(ffx_vulkan_portable PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-if(FFX_VK_PORTABLE_INSTALL)
-    include(CMakePackageConfigHelpers)
-    include(GNUInstallDirs)
-
-    set(FFX_VK_PORTABLE_INSTALL_TARGETS
-        ffx_vulkan_fsr4_v07_assets
-        ffx_vulkan_framegeneration_presenter_policy)
-    if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
-        list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
-            ffx_vulkan_fsr4_v07_vulkan)
-    endif()
-
-    install(TARGETS ${FFX_VK_PORTABLE_INSTALL_TARGETS}
-        EXPORT ffx-vulkan-targets
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    install(EXPORT ffx-vulkan-targets
-        FILE ffx-vulkan-targets.cmake
-        NAMESPACE ffx-vulkan::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
-    configure_package_config_file(
-        cmake/ffx-vulkan-config.cmake.in
-        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config.cmake
-        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
-    write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config-version.cmake
-        VERSION ${PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion)
-    install(FILES
-        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config.cmake
-        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config-version.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
-endif()
-
 if(FFX_VK_PORTABLE_BUILD_FSR3_HOST)
     set(FFX_1_1_4_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/upstream/ffx-1.1.4/sdk")
     add_library(ffx_vulkan_fsr3_host_1_1_4 STATIC
@@ -165,13 +130,15 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_HOST)
         "${FFX_1_1_4_ROOT}/src/components/fsr3/ffx_fsr3.cpp"
     )
     add_library(ffx-vulkan::fsr3-host-1.1.4 ALIAS ffx_vulkan_fsr3_host_1_1_4)
+    set_property(TARGET ffx_vulkan_fsr3_host_1_1_4 PROPERTY
+        EXPORT_NAME fsr3-host-1.1.4)
     set_target_properties(ffx_vulkan_fsr3_host_1_1_4 PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED YES
         CXX_EXTENSIONS NO
     )
     target_include_directories(ffx_vulkan_fsr3_host_1_1_4
-        PUBLIC "${FFX_1_1_4_ROOT}/include"
+        PUBLIC $<BUILD_INTERFACE:${FFX_1_1_4_ROOT}/include>
         PRIVATE
             "${FFX_1_1_4_ROOT}/src/shared"
             "${FFX_1_1_4_ROOT}/src/components"
@@ -201,6 +168,8 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_VK_BACKEND)
         "${FFX_1_1_4_ROOT}/src/shared/ffx_breadcrumbs_list.cpp"
     )
     add_library(ffx-vulkan::fsr3-vk-backend-1.1.4 ALIAS ffx_vulkan_fsr3_vk_backend_1_1_4)
+    set_property(TARGET ffx_vulkan_fsr3_vk_backend_1_1_4 PROPERTY
+        EXPORT_NAME fsr3-vk-backend-1.1.4)
     set_target_properties(ffx_vulkan_fsr3_vk_backend_1_1_4 PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED YES
@@ -212,7 +181,7 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_VK_BACKEND)
         FFX_OF=1
     )
     target_include_directories(ffx_vulkan_fsr3_vk_backend_1_1_4
-        PUBLIC "${FFX_1_1_4_ROOT}/include"
+        PUBLIC $<BUILD_INTERFACE:${FFX_1_1_4_ROOT}/include>
         PRIVATE
             "${FFX_1_1_4_ROOT}/src/shared"
             "${FFX_1_1_4_ROOT}/src/components"
@@ -241,6 +210,11 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_VK_BACKEND)
     target_compile_definitions(ffx_vulkan_portable PRIVATE
         FFX_VK_PORTABLE_HAS_FSR3_UPSCALER=1
     )
+    # The portable implementation uses AMD's backend headers internally, but
+    # consumers use only ffx_vk_portable.h and must not inherit a source-tree
+    # include path from an installed package.
+    target_include_directories(ffx_vulkan_portable PRIVATE
+        "${FFX_1_1_4_ROOT}/include")
     target_link_libraries(ffx_vulkan_portable PRIVATE
         ffx-vulkan::fsr3-vk-backend-1.1.4
     )
@@ -418,6 +392,8 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
     )
     add_library(ffx-vulkan::fsr3-vk-backend-3.1.5 ALIAS
         ffx_vulkan_fsr3_vk_backend_3_1_5)
+    set_property(TARGET ffx_vulkan_fsr3_vk_backend_3_1_5 PROPERTY
+        EXPORT_NAME fsr3-vk-backend-3.1.5)
     set_target_properties(ffx_vulkan_fsr3_vk_backend_3_1_5 PROPERTIES
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED YES
@@ -434,7 +410,7 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
     target_include_directories(ffx_vulkan_fsr3_vk_backend_3_1_5 PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${FFX_2_3_0_ROOT}/api/include>
-    )
+        $<INSTALL_INTERFACE:include>)
     target_link_libraries(ffx_vulkan_fsr3_vk_backend_3_1_5
         PUBLIC ffx-vulkan::portable Vulkan::Vulkan
     )
@@ -459,10 +435,14 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
     )
     add_library(ffx-vulkan::fsr3-vk-framegeneration-3.1.6 ALIAS
         ffx_vulkan_fsr3_vk_framegeneration_3_1_6)
+    set_property(TARGET ffx_vulkan_fsr3_vk_framegeneration_3_1_6 PROPERTY
+        EXPORT_NAME fsr3-vk-framegeneration-3.1.6)
     set_target_properties(ffx_vulkan_fsr3_vk_framegeneration_3_1_6 PROPERTIES
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
     target_include_directories(ffx_vulkan_fsr3_vk_framegeneration_3_1_6
-        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
         PRIVATE
             "${FFX_2_3_0_ROOT}/api/include"
             "${FFX_2_3_0_ROOT}/api/internal"
@@ -489,6 +469,7 @@ endif()
 # closure, or this one when they expose the complete tested FSR3/FSR4 menu.
 add_library(ffx_vulkan_effects INTERFACE)
 add_library(ffx-vulkan::effects ALIAS ffx_vulkan_effects)
+set_property(TARGET ffx_vulkan_effects PROPERTY EXPORT_NAME effects)
 target_link_libraries(ffx_vulkan_effects INTERFACE
     ffx-vulkan::portable
     ffx-vulkan::fsr4-v07-assets
@@ -505,6 +486,60 @@ if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
     target_link_libraries(ffx_vulkan_effects INTERFACE
         ffx-vulkan::fsr3-vk-backend-3.1.5
         ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
+endif()
+
+if(FFX_VK_PORTABLE_INSTALL)
+    include(CMakePackageConfigHelpers)
+    include(GNUInstallDirs)
+
+    # Export every stable, versioned public target.  The SDK source files are
+    # compiled into these archives, so consumers only need this package's
+    # headers and Vulkan; they do not need Q2RTX or a source-tree path.
+    set(FFX_VK_PORTABLE_INSTALL_TARGETS
+        ffx_vulkan_portable
+        ffx_vulkan_fsr4_v07_assets
+        ffx_vulkan_framegeneration_presenter_policy
+        ffx_vulkan_effects)
+    if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
+        list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
+            ffx_vulkan_fsr4_v07_vulkan)
+    endif()
+    if(FFX_VK_PORTABLE_BUILD_FSR3_HOST)
+        list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
+            ffx_vulkan_fsr3_host_1_1_4)
+    endif()
+    if(FFX_VK_PORTABLE_BUILD_FSR3_VK_BACKEND)
+        list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
+            ffx_vulkan_fsr3_vk_backend_1_1_4)
+    endif()
+    if(FFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD)
+        list(APPEND FFX_VK_PORTABLE_INSTALL_TARGETS
+            ffx_vulkan_fsr3_vk_backend_3_1_5
+            ffx_vulkan_fsr3_vk_framegeneration_3_1_6)
+    endif()
+
+    install(TARGETS ${FFX_VK_PORTABLE_INSTALL_TARGETS}
+        EXPORT ffx-vulkan-targets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(EXPORT ffx-vulkan-targets
+        FILE ffx-vulkan-targets.cmake
+        NAMESPACE ffx-vulkan::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
+    configure_package_config_file(
+        cmake/ffx-vulkan-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config-version.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
 endif()
 
 if(FFX_VK_PORTABLE_BUILD_TESTS)

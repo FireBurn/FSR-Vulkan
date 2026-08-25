@@ -95,7 +95,7 @@ common binary-semaphore and Mailbox/Immediate mistakes.
 
 ## Use in another Vulkan project
 
-For all FSR3 paths, vendor this directory (including `upstream/` and
+For all FSR3 paths, either vendor this directory (including `upstream/` and
 `generated/`) and use `add_subdirectory`:
 
 ```cmake
@@ -117,9 +117,24 @@ cmake --build build/ffx-full-stack
 ./build/ffx-full-stack/ffx_vk_full_stack_contract
 ```
 
-This route is intentionally vendored rather than installed: the compact
-installed CMake package is dependency-complete for FSR4 v07 and presentation
-policy, while reusable FSR3 targets retain their pinned AMD SDK source closure.
+or install the complete static-library package and link the same target from a
+clean C++ consumer:
+
+```sh
+cmake -S extern/ffx-vulkan -B build/ffx-vulkan
+cmake --build build/ffx-vulkan
+cmake --install build/ffx-vulkan --prefix /opt/ffx-vulkan
+cmake -S extern/ffx-vulkan/examples/installed-full-stack -B build/consumer \
+  -DCMAKE_PREFIX_PATH=/opt/ffx-vulkan
+cmake --build build/consumer
+./build/consumer/ffx_vk_installed_full_stack_contract
+```
+
+The complete package contains the compiled, private SDK closures and exports
+only the versioned public targets and `include/` headers; a consumer needs
+Vulkan but does not need Q2RTX, `upstream/`, `generated/`, or source-tree
+include paths. The smaller `examples/consumer` remains an FSR4-v07 + WSI-policy
+contract for C hosts that do not need the FSR3 closure.
 
 The application retains instance/device/queue/swapchain ownership. It records
 FSR3 or FSR4 work in its own command buffer, keeps imported images alive until

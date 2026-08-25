@@ -21,6 +21,10 @@ images and call each provider's retire function only after the relevant GPU
 fence has signalled. It can use individual `ffx-vulkan::*` targets instead of
 `ffx-vulkan::effects` when it deliberately supports a smaller feature set.
 
+The identical complete target is also available from an installed package; see
+[`../installed-full-stack`](../installed-full-stack). That route is useful when
+the host must not depend on this source tree.
+
 FSR4 here is the experimental source-v07 INT8/DOT4 provider. It is not
 official FSR 4.1.1, Ray Regeneration, or ML Frame Generation. Shader/model
 assets are intentionally excluded from the project and must be supplied under
