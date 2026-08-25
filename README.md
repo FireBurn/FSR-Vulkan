@@ -232,6 +232,26 @@ same-preset bundle together, and load the names returned by
 `ffxFsr4V07BuildAssetSet`. It is experimental source-v07 code, not FSR 4.1.1,
 Ray Regeneration, or ML Frame Generation.
 
+### Optional v07 asset installation
+
+The reusable library deliberately carries no model data by default. A package
+builder with a compatible, licensed source-v07 bundle can make that explicit:
+
+```sh
+cmake -S extern/ffx-vulkan -B build/ffx-vulkan \
+  -DFFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS=ON \
+  -DFFX_VK_PORTABLE_FSR4_V07_ASSET_DIR=/path/to/fsr4_shaders
+cmake --build build/ffx-vulkan
+cmake --install build/ffx-vulkan --prefix /opt/ffx-vulkan
+```
+
+Configuration fails unless the notice plus every native/quality/balanced/
+performance/ultraperf/DRS initializer, pre-weight, and manifest file exists.
+The bundle is installed under `share/ffx-vulkan/fsr4-v07`; a consumer that uses
+`find_package(ffx-vulkan)` receives that path as
+`FFX_VK_FSR4_V07_ASSET_DIR`. The application remains responsible for passing
+the matching paths returned by `ffxFsr4V07BuildAssetSet` to the provider.
+
 The tests verify the complete patched-source and generated-file hash manifests,
 all 2,816 upscaler, 352 Frame Interpolation, and 56 Optical Flow valid
 pass/permutation lookups, and every unique SPIR-V module with `spirv-val` when

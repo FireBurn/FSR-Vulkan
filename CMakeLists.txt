@@ -12,6 +12,10 @@ option(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN
     "Build the experimental source-v07 FSR4 INT8/DOT4 Vulkan provider" ON)
 option(FFX_VK_PORTABLE_INSTALL
     "Install portable headers, libraries, and a CMake package" ON)
+option(FFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS
+    "Install a complete caller-supplied source-v07 FSR4 asset set with the package" OFF)
+set(FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR "" CACHE PATH
+    "Directory containing one complete source-v07 FSR4 model asset set")
 
 find_package(Vulkan REQUIRED)
 
@@ -514,6 +518,53 @@ endif()
 if(FFX_VK_PORTABLE_INSTALL)
     include(CMakePackageConfigHelpers)
     include(GNUInstallDirs)
+
+    # The reusable provider owns no model payload by default. A distributor
+    # that has a compatible source-v07 asset bundle may opt in explicitly; do
+    # not allow a partial directory to turn into a misleading installed demo.
+    if(FFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS)
+        if(NOT FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR)
+            message(FATAL_ERROR
+                "FFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS requires "
+                "FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR")
+        endif()
+        if(NOT EXISTS "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}/LICENSE-FSR4-v07.txt")
+            message(FATAL_ERROR
+                "FSR4 v07 asset directory lacks LICENSE-FSR4-v07.txt: "
+                "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}")
+        endif()
+        set(FFX_VK_FSR4_INSTALL_FILES
+            "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}/LICENSE-FSR4-v07.txt")
+        foreach(FFX_VK_FSR4_MODEL native quality balanced performance ultraperf drs)
+            set(FFX_VK_FSR4_PREFIX
+                "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}/fsr4_model_v07_i8_${FFX_VK_FSR4_MODEL}")
+            foreach(FFX_VK_FSR4_REQUIRED_SUFFIX
+                    initializers.bin pre_weights.bin shader_manifest.json)
+                if(NOT EXISTS "${FFX_VK_FSR4_PREFIX}_${FFX_VK_FSR4_REQUIRED_SUFFIX}")
+                    message(FATAL_ERROR
+                        "FSR4 v07 asset directory lacks "
+                        "${FFX_VK_FSR4_PREFIX}_${FFX_VK_FSR4_REQUIRED_SUFFIX}")
+                endif()
+            endforeach()
+            file(GLOB FFX_VK_FSR4_MODEL_SPIRV
+                "${FFX_VK_FSR4_PREFIX}_*.spv")
+            if(NOT FFX_VK_FSR4_MODEL_SPIRV)
+                message(FATAL_ERROR
+                    "FSR4 v07 asset directory lacks model SPIR-V for "
+                    "${FFX_VK_FSR4_MODEL}")
+            endif()
+            list(APPEND FFX_VK_FSR4_INSTALL_FILES
+                "${FFX_VK_FSR4_PREFIX}_initializers.bin"
+                "${FFX_VK_FSR4_PREFIX}_pre_weights.bin"
+                "${FFX_VK_FSR4_PREFIX}_shader_manifest.json"
+                ${FFX_VK_FSR4_MODEL_SPIRV})
+        endforeach()
+        # Do not copy the directory wholesale: callers can keep extracted,
+        # alternate, or obsolete blobs beside a valid source-v07 bundle. The
+        # reusable package carries only the explicitly model-prefixed files.
+        install(FILES ${FFX_VK_FSR4_INSTALL_FILES}
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/ffx-vulkan/fsr4-v07")
+    endif()
 
     # Export every stable, versioned public target.  The SDK source files are
     # compiled into these archives, so consumers only need this package's
