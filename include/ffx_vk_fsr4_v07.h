@@ -108,6 +108,21 @@ VkResult ffxFsr4VkCreateContext(
 void ffxFsr4VkDestroyContext(FfxFsr4VkContext* ctx);
 
 // ---------------------------------------------------------------------------
+// Explicit per-frame lifetime.  Call BeginFrame before the provider records a
+// dispatch into a command buffer.  Call RetireFrame only after the host fence
+// proves every submission for all frame IDs through completedFrameId has
+// finished.  This makes descriptor-set and host-visible constant-buffer reuse
+// safe for arbitrary Vulkan frame-in-flight counts; it does not rely on a
+// renderer-specific pool-cycling convention.
+//
+// The backend retains at most three unretired dispatches.  BeginFrame returns
+// VK_NOT_READY when all three are still in flight.  Frame IDs are host-defined
+// monotonically increasing values (zero is valid).
+// ---------------------------------------------------------------------------
+VkResult ffxFsr4VkBeginFrame(FfxInterface* iface, uint64_t frameId);
+VkResult ffxFsr4VkRetireFrame(FfxInterface* iface, uint64_t completedFrameId);
+
+// ---------------------------------------------------------------------------
 // Helpers for provider-side direct access to backend-owned resources.
 //
 // Retrieve the underlying VkImage / dimensions for a resource previously

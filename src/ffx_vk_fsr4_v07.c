@@ -32,9 +32,10 @@
 #define MAX_PIPELINES        32
 #define MAX_PENDING_JOBS     96
 #define MAX_DESC_SETS        64   /* per pool — up to 16 FSR4/SPD/RCAS passes */
-#define NUM_POOL_FRAMES       3   /* triple-buffered descriptor pools */
+#define NUM_POOL_FRAMES       3   /* maximum unretired host dispatches */
 #define MAX_STAGING          32
-#define CBUF_RING_BYTES    (512 * 1024)
+#define CBUF_FRAME_BYTES   (512 * 1024)
+#define CBUF_RING_BYTES    (CBUF_FRAME_BYTES * NUM_POOL_FRAMES)
 
 // Slot offsets inside LAYOUT_FULL (matching -fvk-*-shift flags)
 #define SLOT_SRV_TEX_BASE    0    // t0..t20 → SAMPLED_IMAGE
@@ -81,7 +82,14 @@ typedef struct {
     VkDeviceSize   size;
     VkDeviceSize   allocationSize;
     int            submitted;
+    uint64_t       frameId;
 } Staging;
+
+typedef struct {
+    uint64_t frameId;
+    uint32_t cbOff;
+    VkBool32 inUse;
+} FrameLifetime;
 
 struct FfxFsr4VkContext {
     VkDevice                     dev;
@@ -89,7 +97,6 @@ struct FfxFsr4VkContext {
     const VkAllocationCallbacks* alloc;
 
     VkDescriptorPool  pool[NUM_POOL_FRAMES];
-    uint32_t          poolIdx;        /* cycles 0,1,2 each frame */
     VkSampler         linearSampler;
 
     VkDescriptorSetLayout modelLayout;
@@ -99,7 +106,8 @@ struct FfxFsr4VkContext {
     VkBuffer       cbRing;
     VkDeviceMemory cbMem;
     uint8_t*       cbMap;
-    uint32_t       cbOff;
+    FrameLifetime  frame[NUM_POOL_FRAMES];
+    uint32_t       recordingFrame;
     VkDeviceSize   cbAllocationSize;
 
     VkRes    res[MAX_RESOURCES];
@@ -657,15 +665,13 @@ static FfxErrorCode cbDestroyBackendCtx(FfxInterface* I, FfxUInt32 id) {
     c->stagingCount = 0;
     c->jobCount = 0;
 
-    // Reset cbuffer ring offset
-    c->cbOff = 0;
-
-    // Reset all descriptor pools
+    // The device is idle, so reset all explicit frame-lifetime state.
     for (int p = 0; p < NUM_POOL_FRAMES; p++) {
         if (vkResetDescriptorPool(c->dev, c->pool[p], 0) != VK_SUCCESS)
             return FFX_ERROR_BACKEND_API_ERROR;
     }
-    c->poolIdx = 0;
+    memset(c->frame, 0, sizeof(c->frame));
+    c->recordingFrame = UINT32_MAX;
 
     return FFX_OK;
 }
@@ -885,15 +891,21 @@ static FfxErrorCode cbUnmapRes(FfxInterface* I, FfxResourceInternal ri) {
 
 static FfxErrorCode cbStageCbuf(FfxInterface* I, void* data, FfxUInt32 sz, FfxConstantBuffer* out) {
     if (!I || !I->device || !data || !out) return FFX_ERROR_INVALID_POINTER;
-    if (!sz || sz > CBUF_RING_BYTES) return FFX_ERROR_INVALID_SIZE;
+    if (!sz || sz > CBUF_FRAME_BYTES) return FFX_ERROR_INVALID_SIZE;
     FfxFsr4VkContext* c = (FfxFsr4VkContext*)I->device;
-    uint32_t off = (c->cbOff + 255u) & ~255u;
-    if (off + sz > CBUF_RING_BYTES) off = 0;
-    memcpy(c->cbMap + off, data, sz);
-    c->cbOff = off + sz;
+    if (c->recordingFrame >= NUM_POOL_FRAMES ||
+        !c->frame[c->recordingFrame].inUse)
+        return FFX_ERROR_INVALID_ARGUMENT;
+    FrameLifetime* frame = &c->frame[c->recordingFrame];
+    uint32_t off = (frame->cbOff + 255u) & ~255u;
+    if (off > CBUF_FRAME_BYTES || sz > CBUF_FRAME_BYTES - off)
+        return FFX_ERROR_OUT_OF_RANGE;
+    uint32_t absoluteOff = c->recordingFrame * CBUF_FRAME_BYTES + off;
+    memcpy(c->cbMap + absoluteOff, data, sz);
+    frame->cbOff = off + sz;
     // Encode the ring offset as the resource pointer; the descriptor carries
     // the exact staged UBO byte range.
-    out->resource.resource = (void*)(uintptr_t)off;
+    out->resource.resource = (void*)(uintptr_t)absoluteOff;
     out->resource.description.type = FFX_RESOURCE_TYPE_BUFFER;
     out->resource.description.size = sz;
     return FFX_OK;
@@ -1169,17 +1181,15 @@ static FfxErrorCode cbExecuteJobs(FfxInterface* I, FfxCommandList cl, FfxUInt32 
     }
     VkCommandBuffer cmd = (VkCommandBuffer)cl;
 
-#define EXECUTE_FAIL(error_code) do { c->jobCount = 0; return (error_code); } while (0)
+#define EXECUTE_FAIL(error_code) do { \
+        c->jobCount = 0; c->recordingFrame = UINT32_MAX; return (error_code); \
+    } while (0)
 
-    // Triple-buffered pool cycling: reset the pool from 2 frames ago
-    // (guaranteed idle by Q2RTX's double-buffered fence wait) and use
-    // the current frame's pool for new allocations.
-    uint32_t cur  = c->poolIdx % NUM_POOL_FRAMES;
-    uint32_t old  = (c->poolIdx + 1) % NUM_POOL_FRAMES;  // 2 frames ago
-    if (vkResetDescriptorPool(c->dev, c->pool[old], 0) != VK_SUCCESS)
-        EXECUTE_FAIL(FFX_ERROR_BACKEND_API_ERROR);
+    if (c->recordingFrame >= NUM_POOL_FRAMES ||
+        !c->frame[c->recordingFrame].inUse)
+        EXECUTE_FAIL(FFX_ERROR_INVALID_ARGUMENT);
+    const uint32_t cur = c->recordingFrame;
     VkDescriptorPool activePool = c->pool[cur];
-    c->poolIdx++;
 
     // Flush staging uploads first (recorded before any compute work).  A
     // staging allocation must remain alive until the submitted command buffer
@@ -1195,6 +1205,7 @@ static FfxErrorCode cbExecuteJobs(FfxInterface* I, FfxCommandList cl, FfxUInt32 
         VkBufferCopy bc={0,0,st->size};
         vkCmdCopyBuffer(cmd, st->buf, c->res[st->dstIdx].buf, 1, &bc);
         st->submitted = 1;
+        st->frameId = c->frame[cur].frameId;
         pendingUploads++;
     }
     if (pendingUploads>0) {
@@ -1333,6 +1344,7 @@ static FfxErrorCode cbExecuteJobs(FfxInterface* I, FfxCommandList cl, FfxUInt32 
     }
 
     c->jobCount=0;
+    c->recordingFrame = UINT32_MAX;
 #undef EXECUTE_FAIL
     return FFX_OK;
 }
@@ -1428,9 +1440,8 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
                     (void**)&c->cbMap);
     if (r) goto fail;
 
-    // Triple-buffered descriptor pools — one per in-flight frame.
-    // At the start of each frame, reset the pool from 2 frames ago (guaranteed
-    // complete) and allocate from the current frame's pool.
+    // Three explicit frame-lifetime pools.  The host selects and retires them
+    // with ffxFsr4VkBeginFrame/RetireFrame after its own fence boundaries.
     VkDescriptorPoolSize ps[] = {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         MAX_DESC_SETS * 16},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         MAX_DESC_SETS},
@@ -1448,7 +1459,7 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
         r=vkCreateDescriptorPool(c->dev, &dpci, c->alloc, &c->pool[p]);
         if (r) goto fail;
     }
-    c->poolIdx = 0;
+    c->recordingFrame = UINT32_MAX;
 
     // Populate FfxInterface table
     out->fpGetSDKVersion                     = cbGetSDKVersion;
@@ -1524,14 +1535,14 @@ void ffxFsr4VkDestroyContext(FfxFsr4VkContext* c)
         vkFreeMemory(c->dev,c->cbMem,c->alloc);
         c->cbMem = VK_NULL_HANDLE;
     }
-    c->cbOff = 0;
     for (int p = 0; p < NUM_POOL_FRAMES; p++) {
         if (c->pool[p]) {
             vkDestroyDescriptorPool(c->dev,c->pool[p],c->alloc);
             c->pool[p] = VK_NULL_HANDLE;
         }
     }
-    c->poolIdx = 0;
+    memset(c->frame, 0, sizeof(c->frame));
+    c->recordingFrame = UINT32_MAX;
     if (c->modelLayout) {
         vkDestroyDescriptorSetLayout(c->dev,c->modelLayout,c->alloc);
         c->modelLayout = VK_NULL_HANDLE;
@@ -1548,6 +1559,61 @@ void ffxFsr4VkDestroyContext(FfxFsr4VkContext* c)
         vkDestroySampler(c->dev,c->linearSampler,c->alloc);
         c->linearSampler = VK_NULL_HANDLE;
     }
+}
+
+VkResult ffxFsr4VkBeginFrame(FfxInterface* iface, uint64_t frameId)
+{
+    if (!iface || !iface->device) return VK_ERROR_INITIALIZATION_FAILED;
+    FfxFsr4VkContext* c = (FfxFsr4VkContext*)iface->device;
+    if (c->recordingFrame != UINT32_MAX) return VK_ERROR_VALIDATION_FAILED_EXT;
+
+    for (uint32_t i = 0; i < NUM_POOL_FRAMES; ++i) {
+        FrameLifetime* frame = &c->frame[i];
+        if (frame->inUse) continue;
+        if (!c->pool[i] ||
+            vkResetDescriptorPool(c->dev, c->pool[i], 0) != VK_SUCCESS)
+            return VK_ERROR_DEVICE_LOST;
+        frame->frameId = frameId;
+        frame->cbOff = 0;
+        frame->inUse = VK_TRUE;
+        c->recordingFrame = i;
+        return VK_SUCCESS;
+    }
+    return VK_NOT_READY;
+}
+
+VkResult ffxFsr4VkRetireFrame(FfxInterface* iface, uint64_t completedFrameId)
+{
+    if (!iface || !iface->device) return VK_ERROR_INITIALIZATION_FAILED;
+    FfxFsr4VkContext* c = (FfxFsr4VkContext*)iface->device;
+    /* A scheduler/dispatch error can leave an opened frame with partially
+     * recorded work.  The host's completion guarantee is sufficient to retire
+     * that frame too; otherwise it would permanently consume a pool slot. */
+    if (c->recordingFrame != UINT32_MAX) {
+        const FrameLifetime* recording = &c->frame[c->recordingFrame];
+        if (recording->frameId > completedFrameId)
+            return VK_ERROR_VALIDATION_FAILED_EXT;
+        c->recordingFrame = UINT32_MAX;
+    }
+
+    for (uint32_t i = 0; i < NUM_POOL_FRAMES; ++i) {
+        FrameLifetime* frame = &c->frame[i];
+        if (!frame->inUse || frame->frameId > completedFrameId) continue;
+        if (vkResetDescriptorPool(c->dev, c->pool[i], 0) != VK_SUCCESS)
+            return VK_ERROR_DEVICE_LOST;
+        memset(frame, 0, sizeof(*frame));
+    }
+    for (uint32_t i = 0; i < c->stagingCount;) {
+        Staging* st = &c->staging[i];
+        if (!st->submitted || st->frameId > completedFrameId) {
+            ++i;
+            continue;
+        }
+        vkDestroyBuffer(c->dev, st->buf, c->alloc);
+        vkFreeMemory(c->dev, st->mem, c->alloc);
+        c->staging[i] = c->staging[--c->stagingCount];
+    }
+    return VK_SUCCESS;
 }
 
 // ---------------------------------------------------------------------------

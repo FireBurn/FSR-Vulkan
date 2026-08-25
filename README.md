@@ -112,6 +112,13 @@ FSR3 or FSR4 work in its own command buffer, keeps imported images alive until
 its frame fence signals, and composes UI after interpolation. The FSR3 public
 headers document the exact resource/layout and fence-retirement contracts.
 
+The FSR4-v07 provider also has an explicit three-frame Vulkan lifetime:
+call `ffxFsr4VkBeginFrame(&interface, frame_id)` before each provider dispatch,
+then call `ffxFsr4VkRetireFrame(&interface, completed_frame_id)` only after the
+host fence proves those command buffers have completed. This retires descriptor
+sets, staged model uploads, and the corresponding host-visible constant-buffer
+partition without assuming a particular swapchain or frames-in-flight policy.
+
 The dependency-complete FSR4-v07 subset can also be installed as a CMake
 package:
 

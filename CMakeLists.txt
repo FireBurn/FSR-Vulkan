@@ -783,6 +783,17 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         ffx-vulkan::fsr4-v07-assets)
     add_test(NAME ffx_vk_fsr4_v07_assets_test COMMAND ffx_vk_fsr4_v07_assets_test)
 
+    if(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN)
+        add_executable(ffx_vk_fsr4_v07_lifetime_test
+            tests/fsr4_v07_lifetime_test.c)
+        target_link_libraries(ffx_vk_fsr4_v07_lifetime_test PRIVATE
+            ffx-vulkan::fsr4-v07-vulkan)
+        add_test(NAME ffx_vk_fsr4_v07_lifetime_test
+            COMMAND ffx_vk_fsr4_v07_lifetime_test)
+        set_tests_properties(ffx_vk_fsr4_v07_lifetime_test PROPERTIES
+            RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+    endif()
+
     add_executable(ffx_vk_framegeneration_presenter_policy_test
         tests/framegeneration_presenter_policy_test.c)
     target_link_libraries(ffx_vk_framegeneration_presenter_policy_test PRIVATE
