@@ -56,10 +56,13 @@ static int finite_matrix(const float matrix[16]) {
 FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
     const FfxVkRayRegenerationInputs* inputs, uint64_t* issues) {
     uint64_t result = FFX_VK_RR_VALIDATION_NONE;
-    const uint32_t radiance_signals = FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE |
+    const uint32_t known_signals = FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE |
         FFX_VK_RR_SIGNAL_DIRECT_SPECULAR |
         FFX_VK_RR_SIGNAL_INDIRECT_DIFFUSE |
-        FFX_VK_RR_SIGNAL_INDIRECT_SPECULAR;
+        FFX_VK_RR_SIGNAL_INDIRECT_SPECULAR |
+        FFX_VK_RR_SIGNAL_DOMINANT_LIGHT_VISIBILITY |
+        FFX_VK_RR_SIGNAL_AMBIENT_OCCLUSION |
+        FFX_VK_RR_SIGNAL_SPECULAR_OCCLUSION;
 
     if (!issues)
         return FFX_VK_PORTABLE_ERROR_INVALID_POINTER;
@@ -72,8 +75,10 @@ FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
     if (!inputs->renderSize.width || !inputs->renderSize.height)
         result |= FFX_VK_RR_VALIDATION_ZERO_EXTENT;
 
-    if (!(inputs->signalFlags & radiance_signals))
+    if (!(inputs->signalFlags & known_signals))
         result |= FFX_VK_RR_VALIDATION_REQUIRED_SIGNAL;
+    if (inputs->signalFlags & ~known_signals)
+        result |= FFX_VK_RR_VALIDATION_SIGNAL_FLAGS;
     image_is_readable(&inputs->linearDepth, inputs->renderSize,
         VK_FORMAT_R32_SFLOAT, VK_FORMAT_UNDEFINED, &result);
     image_is_readable(&inputs->motionVectors, inputs->renderSize,
@@ -108,6 +113,12 @@ FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
     if ((inputs->signalFlags & FFX_VK_RR_SIGNAL_INDIRECT_SPECULAR) != 0)
         image_is_readable(&inputs->indirectSpecular, inputs->renderSize,
             VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_UNDEFINED, &result);
+    if ((inputs->signalFlags & FFX_VK_RR_SIGNAL_AMBIENT_OCCLUSION) != 0)
+        image_is_readable(&inputs->ambientOcclusion, inputs->renderSize,
+            VK_FORMAT_R8_UNORM, VK_FORMAT_UNDEFINED, &result);
+    if ((inputs->signalFlags & FFX_VK_RR_SIGNAL_SPECULAR_OCCLUSION) != 0)
+        image_is_readable(&inputs->specularOcclusion, inputs->renderSize,
+            VK_FORMAT_R8_UNORM, VK_FORMAT_UNDEFINED, &result);
     if (inputs->directAlphaSemantic != FFX_VK_RR_ALPHA_NONNEGATIVE_UNDEFINED ||
         inputs->indirectAlphaSemantic != FFX_VK_RR_ALPHA_FIRST_LOBE_HIT_DISTANCE ||
         !isfinite(inputs->noHitDistance) || inputs->noHitDistance <= 0.0f)

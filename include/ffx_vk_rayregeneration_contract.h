@@ -16,14 +16,19 @@ extern "C" {
  * It does not contain AMD neural kernels or an RR dispatch implementation.
  * Hosts can use it to validate their signals before attaching a legally
  * available provider on a supported platform. */
-#define FFX_VK_RAYREGENERATION_CONTRACT_VERSION 1u
+#define FFX_VK_RAYREGENERATION_CONTRACT_VERSION 2u
 
 typedef enum FfxVkRayRegenerationSignalFlagBits {
     FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE = 1u << 0,
     FFX_VK_RR_SIGNAL_DIRECT_SPECULAR = 1u << 1,
     FFX_VK_RR_SIGNAL_INDIRECT_DIFFUSE = 1u << 2,
     FFX_VK_RR_SIGNAL_INDIRECT_SPECULAR = 1u << 3,
-    FFX_VK_RR_SIGNAL_DOMINANT_LIGHT_VISIBILITY = 1u << 4
+    FFX_VK_RR_SIGNAL_DOMINANT_LIGHT_VISIBILITY = 1u << 4,
+    /* Scalar R8_UNORM [0, 1] signals.  Either may be used without a noisy
+     * radiance signal; a real RR provider supports denoising one or many
+     * selected signals in the same dispatch. */
+    FFX_VK_RR_SIGNAL_AMBIENT_OCCLUSION = 1u << 5,
+    FFX_VK_RR_SIGNAL_SPECULAR_OCCLUSION = 1u << 6
 } FfxVkRayRegenerationSignalFlagBits;
 
 typedef enum FfxVkRayRegenerationAlphaSemantic {
@@ -47,7 +52,8 @@ typedef enum FfxVkRayRegenerationValidationIssueBits {
     FFX_VK_RR_VALIDATION_ALPHA_SEMANTIC = 1ull << 8,
     FFX_VK_RR_VALIDATION_DOMINANT_LIGHT = 1ull << 9,
     FFX_VK_RR_VALIDATION_NONFINITE_METADATA = 1ull << 10,
-    FFX_VK_RR_VALIDATION_CAMERA_METADATA = 1ull << 11
+    FFX_VK_RR_VALIDATION_CAMERA_METADATA = 1ull << 11,
+    FFX_VK_RR_VALIDATION_SIGNAL_FLAGS = 1ull << 12
 } FfxVkRayRegenerationValidationIssueBits;
 
 typedef struct FfxVkRayRegenerationInputs {
@@ -84,6 +90,9 @@ typedef struct FfxVkRayRegenerationInputs {
     FfxVkPortableImage directSpecular;
     FfxVkPortableImage indirectDiffuse;
     FfxVkPortableImage indirectSpecular;
+    /* Optional scalar occlusion inputs in R8_UNORM [0, 1]. */
+    FfxVkPortableImage ambientOcclusion;
+    FfxVkPortableImage specularOcclusion;
     uint32_t directAlphaSemantic;
     uint32_t indirectAlphaSemantic;
     float noHitDistance;

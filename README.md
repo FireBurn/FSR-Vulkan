@@ -34,7 +34,7 @@ The API keeps these independently selectable pieces behind one contract:
    input types.
 5. `ffx-vulkan::rayregeneration-contract`, a provider-neutral validator for
    Ray-Regeneration-style depth, motion, material, noisy-radiance, hit-distance,
-   and optional dominant-light inputs. It is deliberately not a neural
+   ambient/specular-occlusion, and optional dominant-light inputs. It is deliberately not a neural
    denoiser or a claim that a signed AMD RR provider is available.
 
 The presenter will use an explicit API rather than impersonating a Vulkan
@@ -158,6 +158,14 @@ camera/dominant-light metadata before a provider is allowed to consume it.
 It does not inspect GPU pixels, create a Vulkan context, record commands, or
 include an AMD Ray Regeneration binary. Those are intentionally separate host
 and provider responsibilities.
+
+The contract models all seven independent RR-style signal inputs: direct and
+indirect diffuse/specular radiance, dominant-light visibility, ambient
+occlusion, and specular occlusion. The scalar occlusion signals are R8_UNORM
+in the [0, 1] range and may be denoised by themselves; a renderer must not
+invent an unused radiance input merely to satisfy the contract. Q2RTX currently
+exports the four radiance inputs and dominant-light visibility, not the two
+separate occlusion inputs.
 
 For the optional dominant-light signal, the direction is from the light source
 toward the shaded target (matching AMD RR); an `R16_SFLOAT` value of FP16_MAX

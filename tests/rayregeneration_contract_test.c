@@ -55,5 +55,31 @@ int main(void) {
     assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
         FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
     assert((issues & FFX_VK_RR_VALIDATION_IMAGE_FORMAT) != 0);
+
+    inputs.indirectDiffuse = image(VK_FORMAT_R16G16B16A16_SFLOAT);
+    inputs.signalFlags = FFX_VK_RR_SIGNAL_AMBIENT_OCCLUSION;
+    inputs.ambientOcclusion = image(VK_FORMAT_R8_UNORM);
+    assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
+        FFX_VK_PORTABLE_OK);
+    assert(issues == FFX_VK_RR_VALIDATION_NONE);
+
+    inputs.signalFlags = FFX_VK_RR_SIGNAL_SPECULAR_OCCLUSION;
+    inputs.specularOcclusion = image(VK_FORMAT_R8_UNORM);
+    assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
+        FFX_VK_PORTABLE_OK);
+    assert(issues == FFX_VK_RR_VALIDATION_NONE);
+
+    inputs.signalFlags = FFX_VK_RR_SIGNAL_AMBIENT_OCCLUSION;
+    inputs.ambientOcclusion = image(VK_FORMAT_R16G16B16A16_SFLOAT);
+    assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
+        FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
+    assert((issues & FFX_VK_RR_VALIDATION_IMAGE_FORMAT) != 0);
+
+    inputs.ambientOcclusion = image(VK_FORMAT_R8_UNORM);
+    inputs.signalFlags = 1u << 31;
+    assert(ffxVkRayRegenerationValidateInputs(&inputs, &issues) ==
+        FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
+    assert((issues & FFX_VK_RR_VALIDATION_REQUIRED_SIGNAL) != 0);
+    assert((issues & FFX_VK_RR_VALIDATION_SIGNAL_FLAGS) != 0);
     return 0;
 }
