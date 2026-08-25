@@ -159,6 +159,11 @@ It does not inspect GPU pixels, create a Vulkan context, record commands, or
 include an AMD Ray Regeneration binary. Those are intentionally separate host
 and provider responsibilities.
 
+For the optional dominant-light signal, the direction is from the shaded point
+toward the emitter; an `R16_SFLOAT` value of FP16_MAX means fully exposed.
+The camera-position delta must be supplied directly by the renderer, rather
+than reconstructed from view matrices.
+
 The FSR4-v07 provider also has an explicit three-frame Vulkan lifetime:
 call `ffxFsr4VkBeginFrame(&interface, frame_id)` before each provider dispatch,
 then call `ffxFsr4VkRetireFrame(&interface, completed_frame_id)` only after the
