@@ -792,6 +792,16 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
             COMMAND ffx_vk_fsr4_v07_lifetime_test)
         set_tests_properties(ffx_vk_fsr4_v07_lifetime_test PROPERTIES
             RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+
+        add_executable(ffx_vk_fsr4_v07_spirv_layout_test
+            tests/fsr4_v07_spirv_layout_test.c)
+        target_compile_definitions(ffx_vk_fsr4_v07_spirv_layout_test PRIVATE
+            FFX_VK_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../..")
+        target_link_libraries(ffx_vk_fsr4_v07_spirv_layout_test PRIVATE
+            ffx-vulkan::fsr4-v07-vulkan
+            ffx-vulkan::fsr4-v07-assets)
+        add_test(NAME ffx_vk_fsr4_v07_spirv_layout_test
+            COMMAND ffx_vk_fsr4_v07_spirv_layout_test)
     endif()
 
     add_executable(ffx_vk_framegeneration_presenter_policy_test

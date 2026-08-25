@@ -92,6 +92,13 @@ typedef struct FfxFsr4VkCreateInfo {
 // ---------------------------------------------------------------------------
 size_t ffxFsr4VkGetScratchMemorySize(void);
 
+// Validate that a generated FSR4-v07 SPIR-V module uses only the descriptor
+// set/binding/type ABI accepted by this portable provider.  Applications can
+// use this before retaining a third-party asset bundle; CreateContext invokes
+// the same validation for every supplied module.
+VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
+                                       uint32_t passIndex);
+
 // ---------------------------------------------------------------------------
 // Create a Vulkan backend context and fill in the FfxInterface table.
 // outInterface->device will be set to the opaque FfxFsr4VkContext*.

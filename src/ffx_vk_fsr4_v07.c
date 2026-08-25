@@ -46,6 +46,39 @@
 #define SLOT_CBUF_MAIN      43    // b0+43   → UNIFORM_BUFFER
 #define FULL_LAYOUT_COUNT   44    // bindings 0..43
 
+/* Minimal SPIR-V reflection used to prove that an opaque generated module
+ * agrees with this provider's descriptor ABI.  Keeping this small avoids a
+ * new runtime dependency for Vulkan applications while preventing a newer
+ * shader bundle from silently being paired with the old hand-authored layout.
+ * Values are the stable SPIR-V 1.x opcode/decoration/storage-class values. */
+#define SPV_MAGIC_NUMBER              0x07230203u
+#define SPV_OP_TYPE_IMAGE             25u
+#define SPV_OP_TYPE_SAMPLER           26u
+#define SPV_OP_TYPE_SAMPLED_IMAGE     27u
+#define SPV_OP_TYPE_ARRAY             28u
+#define SPV_OP_TYPE_RUNTIME_ARRAY     29u
+#define SPV_OP_TYPE_STRUCT            30u
+#define SPV_OP_TYPE_POINTER           32u
+#define SPV_OP_VARIABLE               59u
+#define SPV_OP_DECORATE               71u
+#define SPV_DECORATION_BINDING         33u
+#define SPV_DECORATION_DESCRIPTOR_SET  34u
+#define SPV_DECORATION_BUFFER_BLOCK     3u
+#define SPV_STORAGE_UNIFORM_CONSTANT    0u
+#define SPV_STORAGE_UNIFORM             2u
+#define SPV_STORAGE_STORAGE_BUFFER     12u
+
+typedef enum {
+    SPV_TYPE_NONE = 0,
+    SPV_TYPE_IMAGE,
+    SPV_TYPE_SAMPLER,
+    SPV_TYPE_SAMPLED_IMAGE,
+    SPV_TYPE_ARRAY,
+    SPV_TYPE_RUNTIME_ARRAY,
+    SPV_TYPE_STRUCT,
+    SPV_TYPE_POINTER,
+} SpirvTypeKind;
+
 // ── internal types ───────────────────────────────────────────────────────────
 
 typedef enum { RES_NONE=0, RES_BUFFER=1, RES_IMAGE=2 } ResKind;
@@ -131,6 +164,179 @@ struct FfxFsr4VkContext {
     VkBool32  dotProductSupported;
     VkBool32  computeDerivativesSupported;
 };
+
+static VkDescriptorType expectedDescriptorType(uint32_t passIdx, uint32_t binding)
+{
+    if (passIdx >= FFX_FSR4_VK_PASS_COUNT) return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    if (passIdx >= 1u && passIdx <= 12u)
+        return binding < 4u ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                            : VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    if (binding <= 20u) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    if (binding >= 21u && binding <= 33u) {
+        if (binding == SLOT_SCRATCH && passIdx != 14u)
+            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    }
+    if (binding == SLOT_CBUF_WEIGHTS || binding == SLOT_CBUF_MAIN)
+        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    if (binding == SLOT_SAMPLER) return VK_DESCRIPTOR_TYPE_SAMPLER;
+    return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+}
+
+VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
+                                       uint32_t passIdx)
+{
+    const uint32_t *words;
+    const size_t wordCount = shader ? shader->sizeBytes / sizeof(uint32_t) : 0u;
+    uint32_t bound;
+    uint8_t *typeKind = NULL, *typeImageSampled = NULL, *isBufferBlock = NULL;
+    uint32_t *typeElement = NULL, *varType = NULL, *varStorage = NULL;
+    uint32_t *binding = NULL, *descriptorSet = NULL;
+    VkResult result = VK_ERROR_INVALID_SHADER_NV;
+
+    if (!shader || !shader->spirv || !wordCount ||
+        shader->sizeBytes % sizeof(uint32_t) || passIdx >= FFX_FSR4_VK_PASS_COUNT)
+        return VK_ERROR_INVALID_SHADER_NV;
+    words = shader->spirv;
+    if (wordCount < 5u || words[0] != SPV_MAGIC_NUMBER || !(bound = words[3]) ||
+        bound > (1u << 20u))
+        return VK_ERROR_INVALID_SHADER_NV;
+
+    typeKind = calloc(bound, sizeof(*typeKind));
+    typeImageSampled = calloc(bound, sizeof(*typeImageSampled));
+    isBufferBlock = calloc(bound, sizeof(*isBufferBlock));
+    typeElement = calloc(bound, sizeof(*typeElement));
+    varType = calloc(bound, sizeof(*varType));
+    varStorage = calloc(bound, sizeof(*varStorage));
+    binding = malloc(bound * sizeof(*binding));
+    descriptorSet = malloc(bound * sizeof(*descriptorSet));
+    if (!typeKind || !typeImageSampled || !isBufferBlock || !typeElement ||
+        !varType || !varStorage || !binding || !descriptorSet) {
+        result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        goto cleanup;
+    }
+    for (uint32_t i = 0; i < bound; ++i) {
+        binding[i] = UINT32_MAX;
+        descriptorSet[i] = UINT32_MAX;
+    }
+
+    for (size_t offset = 5u; offset < wordCount;) {
+        const uint32_t instruction = words[offset];
+        const uint32_t instructionWords = instruction >> 16u;
+        const uint32_t opcode = instruction & 0xffffu;
+        if (!instructionWords || instructionWords > wordCount - offset)
+            goto cleanup;
+        switch (opcode) {
+        case SPV_OP_DECORATE:
+            if (instructionWords >= 4u && words[offset + 1u] < bound) {
+                const uint32_t target = words[offset + 1u];
+                const uint32_t decoration = words[offset + 2u];
+                if (decoration == SPV_DECORATION_BINDING)
+                    binding[target] = words[offset + 3u];
+                else if (decoration == SPV_DECORATION_DESCRIPTOR_SET)
+                    descriptorSet[target] = words[offset + 3u];
+                else if (decoration == SPV_DECORATION_BUFFER_BLOCK)
+                    isBufferBlock[target] = 1u;
+            }
+            break;
+        case SPV_OP_TYPE_IMAGE:
+            if (instructionWords >= 9u && words[offset + 1u] < bound) {
+                typeKind[words[offset + 1u]] = SPV_TYPE_IMAGE;
+                typeImageSampled[words[offset + 1u]] = (uint8_t)words[offset + 7u];
+            }
+            break;
+        case SPV_OP_TYPE_SAMPLER:
+            if (instructionWords >= 2u && words[offset + 1u] < bound)
+                typeKind[words[offset + 1u]] = SPV_TYPE_SAMPLER;
+            break;
+        case SPV_OP_TYPE_SAMPLED_IMAGE:
+            if (instructionWords >= 3u && words[offset + 1u] < bound) {
+                typeKind[words[offset + 1u]] = SPV_TYPE_SAMPLED_IMAGE;
+                typeElement[words[offset + 1u]] = words[offset + 2u];
+            }
+            break;
+        case SPV_OP_TYPE_ARRAY:
+        case SPV_OP_TYPE_RUNTIME_ARRAY:
+            if (instructionWords >= 3u && words[offset + 1u] < bound) {
+                typeKind[words[offset + 1u]] = opcode == SPV_OP_TYPE_ARRAY
+                    ? SPV_TYPE_ARRAY : SPV_TYPE_RUNTIME_ARRAY;
+                typeElement[words[offset + 1u]] = words[offset + 2u];
+            }
+            break;
+        case SPV_OP_TYPE_STRUCT:
+            if (instructionWords >= 2u && words[offset + 1u] < bound)
+                typeKind[words[offset + 1u]] = SPV_TYPE_STRUCT;
+            break;
+        case SPV_OP_TYPE_POINTER:
+            if (instructionWords >= 4u && words[offset + 1u] < bound) {
+                typeKind[words[offset + 1u]] = SPV_TYPE_POINTER;
+                typeElement[words[offset + 1u]] = words[offset + 3u];
+            }
+            break;
+        case SPV_OP_VARIABLE:
+            if (instructionWords >= 4u && words[offset + 2u] < bound) {
+                varType[words[offset + 2u]] = words[offset + 1u];
+                varStorage[words[offset + 2u]] = words[offset + 3u];
+            }
+            break;
+        default:
+            break;
+        }
+        offset += instructionWords;
+    }
+
+    {
+        uint8_t seen[FULL_LAYOUT_COUNT] = {0};
+        for (uint32_t id = 0; id < bound; ++id) {
+            VkDescriptorType actual;
+            uint32_t type = varType[id];
+            uint32_t descriptorBinding = binding[id];
+            if (!type || descriptorBinding == UINT32_MAX)
+                continue;
+            if (descriptorSet[id] != 0u || descriptorBinding >= FULL_LAYOUT_COUNT ||
+                seen[descriptorBinding])
+                goto cleanup;
+            while (type < bound &&
+                   (typeKind[type] == SPV_TYPE_POINTER ||
+                    typeKind[type] == SPV_TYPE_ARRAY ||
+                    typeKind[type] == SPV_TYPE_RUNTIME_ARRAY))
+                type = typeElement[type];
+            if (type >= bound) goto cleanup;
+            if (varStorage[id] == SPV_STORAGE_UNIFORM_CONSTANT) {
+                if (typeKind[type] == SPV_TYPE_SAMPLER)
+                    actual = VK_DESCRIPTOR_TYPE_SAMPLER;
+                else if (typeKind[type] == SPV_TYPE_IMAGE && typeImageSampled[type] == 1u)
+                    actual = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                else if (typeKind[type] == SPV_TYPE_IMAGE && typeImageSampled[type] == 2u)
+                    actual = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                else
+                    goto cleanup;
+            } else if (varStorage[id] == SPV_STORAGE_STORAGE_BUFFER ||
+                       (varStorage[id] == SPV_STORAGE_UNIFORM && isBufferBlock[type])) {
+                actual = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            } else if (varStorage[id] == SPV_STORAGE_UNIFORM) {
+                actual = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            } else {
+                goto cleanup;
+            }
+            if (expectedDescriptorType(passIdx, descriptorBinding) != actual)
+                goto cleanup;
+            seen[descriptorBinding] = 1u;
+        }
+    }
+    result = VK_SUCCESS;
+
+cleanup:
+    free(descriptorSet);
+    free(binding);
+    free(varStorage);
+    free(varType);
+    free(typeElement);
+    free(isBufferBlock);
+    free(typeImageSampled);
+    free(typeKind);
+    return result;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -1386,6 +1592,9 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
         memcpy(copy, source->spirv, source->sizeBytes);
         c->blobs[i] = *source;
         c->blobs[i].spirv = copy;
+        r = ffxFsr4VkValidateShaderLayout(&c->blobs[i], (uint32_t)i);
+        if (r != VK_SUCCESS)
+            goto fail;
     }
 
     if ((!ci->modelInitializer) != (!ci->modelInitializerSize) ||

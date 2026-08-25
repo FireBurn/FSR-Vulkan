@@ -20,6 +20,9 @@ int main(void)
     if (!ffxFsr4V07BuildAssetSet(FFX_FSR4_MODEL_PRESET_QUALITY,
                                  1920u, 1080u, &fsr4_assets))
         return 1;
+    /* This portable asset gate is linkable without a renderer/device. */
+    if (ffxFsr4VkValidateShaderLayout(NULL, 0u) != VK_ERROR_INVALID_SHADER_NV)
+        return 1;
 
     /* Keep WSI ownership in the host while sharing generated→real invariants. */
     if (ffxVkFrameGenerationRequiredImageCount(3u, true) != 5u ||

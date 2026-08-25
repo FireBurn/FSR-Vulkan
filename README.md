@@ -119,6 +119,12 @@ host fence proves those command buffers have completed. This retires descriptor
 sets, staged model uploads, and the corresponding host-visible constant-buffer
 partition without assuming a particular swapchain or frames-in-flight policy.
 
+Before pipeline creation, the v07 provider reflects each supplied SPIR-V module
+and rejects descriptor set/binding/type declarations outside its documented
+v07 ABI. `ffxFsr4VkValidateShaderLayout` exposes the same fail-closed check to
+asset loaders. This is an ABI guard for the known v07 graph, not a claim that
+arbitrary future FSR4 shaders can use the provider unchanged.
+
 The dependency-complete FSR4-v07 subset can also be installed as a CMake
 package:
 
