@@ -63,6 +63,11 @@ FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
         FFX_VK_RR_SIGNAL_DOMINANT_LIGHT_VISIBILITY |
         FFX_VK_RR_SIGNAL_AMBIENT_OCCLUSION |
         FFX_VK_RR_SIGNAL_SPECULAR_OCCLUSION;
+    const uint32_t primary_signals = FFX_VK_RR_SIGNAL_DIRECT_DIFFUSE |
+        FFX_VK_RR_SIGNAL_DIRECT_SPECULAR |
+        FFX_VK_RR_SIGNAL_INDIRECT_DIFFUSE |
+        FFX_VK_RR_SIGNAL_INDIRECT_SPECULAR |
+        FFX_VK_RR_SIGNAL_DOMINANT_LIGHT_VISIBILITY;
 
     if (!issues)
         return FFX_VK_PORTABLE_ERROR_INVALID_POINTER;
@@ -75,7 +80,9 @@ FfxVkPortableResult ffxVkRayRegenerationValidateInputs(
     if (!inputs->renderSize.width || !inputs->renderSize.height)
         result |= FFX_VK_RR_VALIDATION_ZERO_EXTENT;
 
-    if (!(inputs->signalFlags & known_signals))
+    /* AO and specular occlusion are optional additions. A real RR provider
+     * requires at least one primary radiance or dominant-light signal. */
+    if (!(inputs->signalFlags & primary_signals))
         result |= FFX_VK_RR_VALIDATION_REQUIRED_SIGNAL;
     if (inputs->signalFlags & ~known_signals)
         result |= FFX_VK_RR_VALIDATION_SIGNAL_FLAGS;

@@ -24,9 +24,9 @@ typedef enum FfxVkRayRegenerationSignalFlagBits {
     FFX_VK_RR_SIGNAL_INDIRECT_DIFFUSE = 1u << 2,
     FFX_VK_RR_SIGNAL_INDIRECT_SPECULAR = 1u << 3,
     FFX_VK_RR_SIGNAL_DOMINANT_LIGHT_VISIBILITY = 1u << 4,
-    /* Scalar R8_UNORM [0, 1] signals.  Either may be used without a noisy
-     * radiance signal; a real RR provider supports denoising one or many
-     * selected signals in the same dispatch. */
+    /* Optional scalar R8_UNORM [0, 1] signals. A real RR provider supports
+     * denoising one or many selected signals in the same dispatch, but these
+     * additions do not replace the required primary radiance/light signal. */
     FFX_VK_RR_SIGNAL_AMBIENT_OCCLUSION = 1u << 5,
     FFX_VK_RR_SIGNAL_SPECULAR_OCCLUSION = 1u << 6
 } FfxVkRayRegenerationSignalFlagBits;
