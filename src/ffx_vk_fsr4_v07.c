@@ -100,10 +100,17 @@ typedef struct {
 typedef enum { PIPE_MODEL=0, PIPE_FULL=1 } PipeKind;
 
 typedef struct {
+    VkDescriptorSetLayoutBinding bindings[FULL_LAYOUT_COUNT];
+    VkBool32 bindingPresent[FULL_LAYOUT_COUNT];
+    uint32_t bindingCount;
+} SpirvDescriptorLayout;
+
+typedef struct {
     VkPipeline            pipeline;
     VkPipelineLayout      layout;
     VkDescriptorSetLayout dsLayout;
     PipeKind              kind;
+    VkBool32              bindingPresent[FULL_LAYOUT_COUNT];
 } VkPipe;
 
 typedef struct { FfxGpuJobDescription d; } Job;
@@ -131,10 +138,6 @@ struct FfxFsr4VkContext {
 
     VkDescriptorPool  pool[NUM_POOL_FRAMES];
     VkSampler         linearSampler;
-
-    VkDescriptorSetLayout modelLayout;
-    VkDescriptorSetLayout fullLayout;
-    VkDescriptorSetLayout fullLayoutRcas;
 
     VkBuffer       cbRing;
     VkDeviceMemory cbMem;
@@ -183,8 +186,9 @@ static VkDescriptorType expectedDescriptorType(uint32_t passIdx, uint32_t bindin
     return VK_DESCRIPTOR_TYPE_MAX_ENUM;
 }
 
-VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
-                                       uint32_t passIdx)
+static VkResult reflectShaderLayout(const FfxFsr4VkShaderBlob* shader,
+                                    uint32_t passIdx,
+                                    SpirvDescriptorLayout* layout)
 {
     const uint32_t *words;
     const size_t wordCount = shader ? shader->sizeBytes / sizeof(uint32_t) : 0u;
@@ -194,6 +198,7 @@ VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
     uint32_t *binding = NULL, *descriptorSet = NULL;
     VkResult result = VK_ERROR_INVALID_SHADER_NV;
 
+    if (layout) memset(layout, 0, sizeof(*layout));
     if (!shader || !shader->spirv || !wordCount ||
         shader->sizeBytes % sizeof(uint32_t) || passIdx >= FFX_FSR4_VK_PASS_COUNT)
         return VK_ERROR_INVALID_SHADER_NV;
@@ -322,6 +327,15 @@ VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
             if (expectedDescriptorType(passIdx, descriptorBinding) != actual)
                 goto cleanup;
             seen[descriptorBinding] = 1u;
+            if (layout) {
+                VkDescriptorSetLayoutBinding* reflected =
+                    &layout->bindings[layout->bindingCount++];
+                reflected->binding = descriptorBinding;
+                reflected->descriptorType = actual;
+                reflected->descriptorCount = 1u;
+                reflected->stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+                layout->bindingPresent[descriptorBinding] = VK_TRUE;
+            }
         }
     }
     result = VK_SUCCESS;
@@ -336,6 +350,12 @@ cleanup:
     free(typeImageSampled);
     free(typeKind);
     return result;
+}
+
+VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
+                                       uint32_t passIdx)
+{
+    return reflectShaderLayout(shader, passIdx, NULL);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -573,96 +593,6 @@ static VkFormat toVkFmt(FfxSurfaceFormat f)
     }
 }
 
-// ── descriptor set layout builders ───────────────────────────────────────────
-
-static VkResult buildModelLayout(FfxFsr4VkContext* c)
-{
-    VkDescriptorSetLayoutBinding b[4];
-    memset(b, 0, sizeof(b));
-    for (int i=0; i<4; i++) {
-        b[i].binding=i;
-        b[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        b[i].descriptorCount=1;
-        b[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-    VkDescriptorSetLayoutCreateInfo ci;
-    memset(&ci, 0, sizeof(ci));
-    ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    ci.bindingCount=4; ci.pBindings=b;
-    return vkCreateDescriptorSetLayout(c->dev, &ci, c->alloc, &c->modelLayout);
-}
-
-static VkResult buildFullLayoutVariant(FfxFsr4VkContext* c,
-                                        VkDescriptorType scratch_type,
-                                        VkDescriptorSetLayout* outLayout)
-{
-    const uint32_t N = FULL_LAYOUT_COUNT;
-    VkDescriptorSetLayoutBinding* b =
-        (VkDescriptorSetLayoutBinding*)calloc(N, sizeof(*b));
-    if (!b) return VK_ERROR_OUT_OF_HOST_MEMORY;
-
-    // Default texture-register bindings are separate sampled images.  DXC
-    // does not merge Texture2D and SamplerState merely because their numeric
-    // bindings collide; s0 is shifted to binding 35 below.
-    // Unused bindings are harmless — shaders won't access them.
-    for (uint32_t i=0; i<N; i++) {
-        b[i].binding=i;
-        b[i].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        b[i].descriptorCount=1;
-        b[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;
-        b[i].pImmutableSamplers=NULL;
-    }
-
-    // UAV bindings 21..33 (u0..u12): STORAGE_IMAGE by default
-    for (uint32_t u=0; u<=12; u++) {
-        uint32_t s = SLOT_UAV_BASE + u;
-        b[s].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        b[s].pImmutableSamplers = NULL;
-    }
-
-    // u11 (binding 32): per-variant type — STORAGE_BUFFER for pre/post/spd,
-    // STORAGE_IMAGE for rcas
-    b[SLOT_SCRATCH].descriptorType = scratch_type;
-    b[SLOT_SCRATCH].pImmutableSamplers = NULL;
-
-    // cbPass_Weights (binding 34): UNIFORM_BUFFER
-    b[SLOT_CBUF_WEIGHTS].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    b[SLOT_CBUF_WEIGHTS].pImmutableSamplers = NULL;
-
-    // g_history_sampler (s0 shifted to binding 35)
-    b[SLOT_SAMPLER].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-    b[SLOT_SAMPLER].pImmutableSamplers = &c->linearSampler;
-
-    // Main constants (binding 43): UNIFORM_BUFFER
-    b[SLOT_CBUF_MAIN].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    b[SLOT_CBUF_MAIN].pImmutableSamplers = NULL;
-
-    VkDescriptorSetLayoutCreateInfo ci;
-    memset(&ci, 0, sizeof(ci));
-    ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    ci.bindingCount=N; ci.pBindings=b;
-    VkResult r = vkCreateDescriptorSetLayout(c->dev, &ci, c->alloc, outLayout);
-    free(b);
-    return r;
-}
-
-static VkResult buildFullLayout(FfxFsr4VkContext* c)
-{
-    // pre/post/spd: ScratchBuffer at binding 32 is STORAGE_BUFFER
-    VkResult r = buildFullLayoutVariant(c, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                         &c->fullLayout);
-    if (r != VK_SUCCESS) return r;
-
-    // rcas: rw_rcas_output at binding 32 is STORAGE_IMAGE
-    r = buildFullLayoutVariant(c, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                                &c->fullLayoutRcas);
-    if (r != VK_SUCCESS) {
-        vkDestroyDescriptorSetLayout(c->dev, c->fullLayout, c->alloc);
-        c->fullLayout = VK_NULL_HANDLE;
-    }
-    return r;
-}
-
 // ── pipeline creation ─────────────────────────────────────────────────────────
 
 static VkResult mkPipeline(FfxFsr4VkContext* c, uint32_t passIdx, VkPipe* out)
@@ -676,10 +606,37 @@ static VkResult mkPipeline(FfxFsr4VkContext* c, uint32_t passIdx, VkPipe* out)
 
     PipeKind kind = (passIdx==0||passIdx==13||passIdx==14||passIdx==15)
                     ? PIPE_FULL : PIPE_MODEL;
-    out->kind    = kind;
-    out->dsLayout = (kind==PIPE_MODEL) ? c->modelLayout
-                  : (passIdx==14)     ? c->fullLayoutRcas
-                  :                     c->fullLayout;
+    SpirvDescriptorLayout reflected;
+    VkResult r = reflectShaderLayout(blob, passIdx, &reflected);
+    if (r != VK_SUCCESS || !reflected.bindingCount)
+        return r == VK_SUCCESS ? VK_ERROR_INVALID_SHADER_NV : r;
+    // The SPIR-V ID order is not necessarily descriptor-binding order. Vulkan
+    // accepts either, but sorting keeps layouts and diagnostics deterministic.
+    for (uint32_t i = 0; i + 1u < reflected.bindingCount; ++i) {
+        for (uint32_t j = i + 1u; j < reflected.bindingCount; ++j) {
+            if (reflected.bindings[j].binding < reflected.bindings[i].binding) {
+                VkDescriptorSetLayoutBinding tmp = reflected.bindings[i];
+                reflected.bindings[i] = reflected.bindings[j];
+                reflected.bindings[j] = tmp;
+            }
+        }
+    }
+    for (uint32_t i = 0; i < reflected.bindingCount; ++i) {
+        if (reflected.bindings[i].binding == SLOT_SAMPLER)
+            reflected.bindings[i].pImmutableSamplers = &c->linearSampler;
+    }
+    VkDescriptorSetLayoutCreateInfo dsci;
+    memset(&dsci, 0, sizeof(dsci));
+    dsci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dsci.bindingCount = reflected.bindingCount;
+    dsci.pBindings = reflected.bindings;
+    memset(out, 0, sizeof(*out));
+    r = vkCreateDescriptorSetLayout(c->dev, &dsci, c->alloc, &out->dsLayout);
+    if (r != VK_SUCCESS)
+        return r;
+    out->kind = kind;
+    memcpy(out->bindingPresent, reflected.bindingPresent,
+           sizeof(out->bindingPresent));
 
     VkPipelineLayoutCreateInfo plci;
     memset(&plci, 0, sizeof(plci));
@@ -691,8 +648,10 @@ static VkResult mkPipeline(FfxFsr4VkContext* c, uint32_t passIdx, VkPipe* out)
     plci.pushConstantRangeCount = 0;
     plci.pPushConstantRanges = NULL;
 
-    VkResult r = vkCreatePipelineLayout(c->dev, &plci, c->alloc, &out->layout);
+    r = vkCreatePipelineLayout(c->dev, &plci, c->alloc, &out->layout);
     if (r) {
+        vkDestroyDescriptorSetLayout(c->dev, out->dsLayout, c->alloc);
+        out->dsLayout = VK_NULL_HANDLE;
         out->layout = VK_NULL_HANDLE;
         return r;
     }
@@ -705,6 +664,8 @@ static VkResult mkPipeline(FfxFsr4VkContext* c, uint32_t passIdx, VkPipe* out)
     r = vkCreateShaderModule(c->dev, &smci, c->alloc, &sm);
     if (r) {
         vkDestroyPipelineLayout(c->dev,out->layout,c->alloc);
+        vkDestroyDescriptorSetLayout(c->dev,out->dsLayout,c->alloc);
+        out->dsLayout = VK_NULL_HANDLE;
         out->layout = VK_NULL_HANDLE;
         return r;
     }
@@ -722,6 +683,8 @@ static VkResult mkPipeline(FfxFsr4VkContext* c, uint32_t passIdx, VkPipe* out)
     vkDestroyShaderModule(c->dev, sm, c->alloc);
     if (r) {
         vkDestroyPipelineLayout(c->dev, out->layout, c->alloc);
+        vkDestroyDescriptorSetLayout(c->dev, out->dsLayout, c->alloc);
+        out->dsLayout = VK_NULL_HANDLE;
         out->layout = VK_NULL_HANDLE;
         out->pipeline = VK_NULL_HANDLE;
     }
@@ -749,6 +712,8 @@ static void destroyPipeline(FfxFsr4VkContext* c, VkPipe* pipeline)
         vkDestroyPipeline(c->dev, pipeline->pipeline, c->alloc);
     if (pipeline->layout)
         vkDestroyPipelineLayout(c->dev, pipeline->layout, c->alloc);
+    if (pipeline->dsLayout)
+        vkDestroyDescriptorSetLayout(c->dev, pipeline->dsLayout, c->alloc);
     memset(pipeline, 0, sizeof(*pipeline));
 }
 
@@ -1224,60 +1189,42 @@ static void imgBarrier(VkCommandBuffer cmd, VkImage img,
 
 // ── descriptor writing helpers ────────────────────────────────────────────────
 
-static FfxErrorCode writeModelDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
-    const FfxComputeJobDescription* cj)
+static FfxErrorCode writeModelDs(FfxFsr4VkContext* c, const VkPipe* pipe,
+    VkDescriptorSet ds, const FfxComputeJobDescription* cj)
 {
     VkWriteDescriptorSet wr[4];
     VkDescriptorBufferInfo bi[4];
     memset(wr,0,sizeof(wr)); memset(bi,0,sizeof(bi));
     uint32_t wc=0;
+    uint8_t written[4] = {0};
 
-    if (!c || !ds || !cj || cj->pipeline.srvBufferCount != 2 ||
+    if (!c || !pipe || !ds || !cj || cj->pipeline.srvBufferCount != 2 ||
         cj->pipeline.uavBufferCount != 2)
         return FFX_ERROR_INVALID_ARGUMENT;
 
-    // binding 0: SRV buffer[0] (input, t0→0)
-    if (cj->pipeline.srvBufferCount>0) {
-        uint32_t idx=cj->srvBuffers[0].resource.internalIndex;
-        if (idx<c->resCount && c->res[idx].kind==RES_BUFFER && c->res[idx].buf) {
+    const FfxResourceInternal resources[4] = {
+        cj->srvBuffers[0].resource, cj->srvBuffers[1].resource,
+        cj->uavBuffers[0].resource, cj->uavBuffers[1].resource};
+    for (uint32_t binding = 0; binding < 4; ++binding) {
+        if (!pipe->bindingPresent[binding]) continue;
+        uint32_t idx = resources[binding].internalIndex;
+        if (idx < c->resCount && c->res[idx].kind == RES_BUFFER && c->res[idx].buf) {
             bi[wc]=(VkDescriptorBufferInfo){c->res[idx].buf,0,VK_WHOLE_SIZE};
             wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                NULL,ds,0,0,1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,NULL,&bi[wc],NULL}; wc++;
+                NULL,ds,binding,0,1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,NULL,&bi[wc],NULL};
+            written[binding] = 1u;
+            wc++;
         } else return FFX_ERROR_INVALID_ARGUMENT;
     }
-    // binding 1: SRV buffer[1] (weights, t1→1)
-    if (cj->pipeline.srvBufferCount>1) {
-        uint32_t idx=cj->srvBuffers[1].resource.internalIndex;
-        if (idx<c->resCount && c->res[idx].kind==RES_BUFFER && c->res[idx].buf) {
-            bi[wc]=(VkDescriptorBufferInfo){c->res[idx].buf,0,VK_WHOLE_SIZE};
-            wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                NULL,ds,1,0,1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,NULL,&bi[wc],NULL}; wc++;
-        } else return FFX_ERROR_INVALID_ARGUMENT;
-    }
-    // binding 2: UAV buffer[0] (output, u0→2)
-    if (cj->pipeline.uavBufferCount>0) {
-        uint32_t idx=cj->uavBuffers[0].resource.internalIndex;
-        if (idx<c->resCount && c->res[idx].kind==RES_BUFFER && c->res[idx].buf) {
-            bi[wc]=(VkDescriptorBufferInfo){c->res[idx].buf,0,VK_WHOLE_SIZE};
-            wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                NULL,ds,2,0,1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,NULL,&bi[wc],NULL}; wc++;
-        } else return FFX_ERROR_INVALID_ARGUMENT;
-    }
-    // binding 3: UAV buffer[1] (scratch, u1→3)
-    if (cj->pipeline.uavBufferCount>1) {
-        uint32_t idx=cj->uavBuffers[1].resource.internalIndex;
-        if (idx<c->resCount && c->res[idx].kind==RES_BUFFER && c->res[idx].buf) {
-            bi[wc]=(VkDescriptorBufferInfo){c->res[idx].buf,0,VK_WHOLE_SIZE};
-            wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                NULL,ds,3,0,1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,NULL,&bi[wc],NULL}; wc++;
-        } else return FFX_ERROR_INVALID_ARGUMENT;
-    }
-    if (wc != 4) return FFX_ERROR_INVALID_ARGUMENT;
+    for (uint32_t binding = 0; binding < 4; ++binding)
+        if (pipe->bindingPresent[binding] && !written[binding])
+            return FFX_ERROR_INVALID_ARGUMENT;
+    if (!wc) return FFX_ERROR_INVALID_ARGUMENT;
     vkUpdateDescriptorSets(c->dev,wc,wr,0,NULL);
     return FFX_OK;
 }
 
-static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
+static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, const VkPipe* pipe, VkDescriptorSet ds,
     const FfxComputeJobDescription* cj)
 {
     // Upper bound on writes: 44 bindings + spare
@@ -1287,8 +1234,9 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
     VkDescriptorBufferInfo bufs[8];       // UAV bufs + scratch + cbuffers
     memset(wr,0,sizeof(wr)); memset(imgs,0,sizeof(imgs)); memset(bufs,0,sizeof(bufs));
     uint32_t wc=0, ic=0, bc=0;
+    uint8_t written[FULL_LAYOUT_COUNT] = {0};
 
-    if (!c || !ds || !cj || cj->pipeline.srvTextureCount > 21 ||
+    if (!c || !pipe || !ds || !cj || cj->pipeline.srvTextureCount > 21 ||
         cj->pipeline.uavTextureCount > 13 ||
         cj->pipeline.uavBufferCount > 1 ||
         cj->pipeline.srvBufferCount != 0 ||
@@ -1303,13 +1251,14 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
     for (uint32_t i=0; i<cj->pipeline.srvTextureCount && i<21; i++) {
         uint32_t idx=cj->srvTextures[i].resource.internalIndex;
         if (idx == UINT32_MAX) continue;
+        if (!pipe->bindingPresent[SLOT_SRV_TEX_BASE + i]) continue;
         if (idx<c->resCount && c->res[idx].kind==RES_IMAGE && c->res[idx].view) {
             imgs[ic]=(VkDescriptorImageInfo){VK_NULL_HANDLE, c->res[idx].view,
                 VK_IMAGE_LAYOUT_GENERAL};
             wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 NULL,ds,SLOT_SRV_TEX_BASE+i,0,1,
                 VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,&imgs[ic],NULL,NULL};
-            ic++; wc++;
+            written[SLOT_SRV_TEX_BASE + i] = 1u; ic++; wc++;
         } else return FFX_ERROR_INVALID_ARGUMENT;
     }
 
@@ -1317,13 +1266,14 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
     for (uint32_t i=0; i<cj->pipeline.uavTextureCount && i<13; i++) {
         uint32_t idx=cj->uavTextures[i].resource.internalIndex;
         if (idx == UINT32_MAX) continue;
+        if (!pipe->bindingPresent[SLOT_UAV_BASE + i]) continue;
         if (idx<c->resCount && c->res[idx].kind==RES_IMAGE && c->res[idx].view) {
             imgs[ic]=(VkDescriptorImageInfo){VK_NULL_HANDLE, c->res[idx].view,
                 VK_IMAGE_LAYOUT_GENERAL};
             wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 NULL,ds,SLOT_UAV_BASE+i,0,1,
                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,&imgs[ic],NULL,NULL};
-            ic++; wc++;
+            written[SLOT_UAV_BASE + i] = 1u; ic++; wc++;
         } else return FFX_ERROR_INVALID_ARGUMENT;
     }
 
@@ -1337,15 +1287,16 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
         uint32_t u_reg = cj->pipeline.uavBufferBindings[i].bindingIndex;
         if (u_reg != 11) return FFX_ERROR_INVALID_ARGUMENT;
         uint32_t binding = SLOT_UAV_BASE + u_reg;
+        if (!pipe->bindingPresent[binding]) continue;
         bufs[bc]=(VkDescriptorBufferInfo){c->res[idx].buf,0,VK_WHOLE_SIZE};
         wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             NULL,ds,binding,0,1,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,NULL,&bufs[bc],NULL};
-        bc++; wc++;
+        written[binding] = 1u; bc++; wc++;
     }
 
     // ── Main constants (b0) → binding 43 (UNIFORM_BUFFER) ──
-    if (cj->pipeline.constCount>0) {
+    if (cj->pipeline.constCount>0 && pipe->bindingPresent[SLOT_CBUF_MAIN]) {
         uint32_t off=(uint32_t)(uintptr_t)cj->cbs[0].resource.resource;
         VkDeviceSize range = cj->cbs[0].resource.description.size;
         if (!range || off > CBUF_RING_BYTES || range > CBUF_RING_BYTES - off)
@@ -1354,11 +1305,11 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
         wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             NULL,ds,SLOT_CBUF_MAIN,0,1,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,NULL,&bufs[bc],NULL};
-        bc++; wc++;
+        written[SLOT_CBUF_MAIN] = 1u; bc++; wc++;
     }
 
     // ── Pass weights (cbPass_Weights) → binding 34 (UNIFORM_BUFFER) ──
-    if (cj->pipeline.constCount>1) {
+    if (cj->pipeline.constCount>1 && pipe->bindingPresent[SLOT_CBUF_WEIGHTS]) {
         uint32_t off=(uint32_t)(uintptr_t)cj->cbs[1].resource.resource;
         VkDeviceSize range = cj->cbs[1].resource.description.size;
         if (!range || off > CBUF_RING_BYTES || range > CBUF_RING_BYTES - off)
@@ -1367,9 +1318,14 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, VkDescriptorSet ds,
         wr[wc]=(VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             NULL,ds,SLOT_CBUF_WEIGHTS,0,1,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,NULL,&bufs[bc],NULL};
-        bc++; wc++;
+        written[SLOT_CBUF_WEIGHTS] = 1u; bc++; wc++;
     }
 
+    for (uint32_t binding = 0; binding < FULL_LAYOUT_COUNT; ++binding) {
+        if (pipe->bindingPresent[binding] && binding != SLOT_SAMPLER &&
+            !written[binding])
+            return FFX_ERROR_INVALID_ARGUMENT;
+    }
     if (!wc) return FFX_ERROR_INVALID_ARGUMENT;
     vkUpdateDescriptorSets(c->dev, wc, wr, 0, NULL);
     return FFX_OK;
@@ -1511,8 +1467,8 @@ static FfxErrorCode cbExecuteJobs(FfxInterface* I, FfxCommandList cl, FfxUInt32 
                 EXECUTE_FAIL(FFX_ERROR_BACKEND_API_ERROR);
 
             FfxErrorCode writeResult = (bp->kind==PIPE_FULL)
-                ? writeFullDs(c,ds,cj)
-                : writeModelDs(c,ds,cj);
+                ? writeFullDs(c,bp,ds,cj)
+                : writeModelDs(c,bp,ds,cj);
             if (writeResult != FFX_OK)
                 EXECUTE_FAIL(writeResult);
 
@@ -1624,7 +1580,7 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
         c->prePassWeightsSize = ci->prePassWeightsSize;
     }
 
-    // Sampler (shared, baked into LAYOUT_FULL immutable samplers)
+    // Sampler (used as an immutable sampler by reflected full-pass layouts)
     VkSamplerCreateInfo sci;
     memset(&sci, 0, sizeof(sci));
     sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1634,10 +1590,6 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
     sci.maxLod=VK_LOD_CLAMP_NONE;
     r=vkCreateSampler(c->dev,&sci,c->alloc,&c->linearSampler);
     if (r) goto fail;
-
-    // Descriptor set layouts
-    r=buildModelLayout(c); if (r) goto fail;
-    r=buildFullLayout(c);  if (r) goto fail;
 
     // cbuffer ring buffer (host-visible, persistently mapped)
     r=mkBuf(c, CBUF_RING_BYTES,
@@ -1752,18 +1704,6 @@ void ffxFsr4VkDestroyContext(FfxFsr4VkContext* c)
     }
     memset(c->frame, 0, sizeof(c->frame));
     c->recordingFrame = UINT32_MAX;
-    if (c->modelLayout) {
-        vkDestroyDescriptorSetLayout(c->dev,c->modelLayout,c->alloc);
-        c->modelLayout = VK_NULL_HANDLE;
-    }
-    if (c->fullLayout) {
-        vkDestroyDescriptorSetLayout(c->dev,c->fullLayout,c->alloc);
-        c->fullLayout = VK_NULL_HANDLE;
-    }
-    if (c->fullLayoutRcas) {
-        vkDestroyDescriptorSetLayout(c->dev,c->fullLayoutRcas,c->alloc);
-        c->fullLayoutRcas = VK_NULL_HANDLE;
-    }
     if (c->linearSampler) {
         vkDestroySampler(c->dev,c->linearSampler,c->alloc);
         c->linearSampler = VK_NULL_HANDLE;
