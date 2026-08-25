@@ -58,6 +58,7 @@ typedef struct {
     VkImageView    view;
     VkFormat       fmt;
     uint32_t       w, h;
+    VkDeviceSize   allocationSize;
     int            external;
     int            needsInit;  /* 1 = image needs UNDEFINED→GENERAL transition */
 } VkRes;
@@ -78,6 +79,7 @@ typedef struct {
     VkDeviceMemory mem;
     uint32_t       dstIdx;
     VkDeviceSize   size;
+    VkDeviceSize   allocationSize;
     int            submitted;
 } Staging;
 
@@ -98,6 +100,7 @@ struct FfxFsr4VkContext {
     VkDeviceMemory cbMem;
     uint8_t*       cbMap;
     uint32_t       cbOff;
+    VkDeviceSize   cbAllocationSize;
 
     VkRes    res[MAX_RESOURCES];
     uint32_t resCount;
@@ -229,11 +232,13 @@ static VkResult queryRequiredFormats(FfxFsr4VkContext* c)
 
 static VkResult mkBuf(FfxFsr4VkContext* c, VkDeviceSize sz,
                       VkBufferUsageFlags usage, VkMemoryPropertyFlags mf,
-                      VkBuffer* ob, VkDeviceMemory* om)
+                      VkBuffer* ob, VkDeviceMemory* om,
+                      VkDeviceSize* allocationSize)
 {
-    if (!ob || !om || !sz) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!ob || !om || !allocationSize || !sz) return VK_ERROR_INITIALIZATION_FAILED;
     *ob = VK_NULL_HANDLE;
     *om = VK_NULL_HANDLE;
+    *allocationSize = 0;
     VkBufferCreateInfo bi;
     memset(&bi, 0, sizeof(bi));
     bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -264,19 +269,23 @@ static VkResult mkBuf(FfxFsr4VkContext* c, VkDeviceSize sz,
         vkDestroyBuffer(c->dev, *ob, c->alloc);
         *om = VK_NULL_HANDLE;
         *ob = VK_NULL_HANDLE;
+    } else {
+        *allocationSize = mr.size;
     }
     return r;
 }
 
 static VkResult mkImg(FfxFsr4VkContext* c, uint32_t w, uint32_t h,
                       VkFormat fmt, VkImageUsageFlags usage,
-                      VkImage* oi, VkDeviceMemory* om, VkImageView* ov)
+                      VkImage* oi, VkDeviceMemory* om, VkImageView* ov,
+                      VkDeviceSize* allocationSize)
 {
-    if (!oi || !om || !ov || !w || !h || fmt == VK_FORMAT_UNDEFINED)
+    if (!oi || !om || !ov || !allocationSize || !w || !h || fmt == VK_FORMAT_UNDEFINED)
         return VK_ERROR_INITIALIZATION_FAILED;
     *oi = VK_NULL_HANDLE;
     *om = VK_NULL_HANDLE;
     *ov = VK_NULL_HANDLE;
+    *allocationSize = 0;
     VkImageCreateInfo ii;
     memset(&ii, 0, sizeof(ii));
     ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -326,6 +335,8 @@ static VkResult mkImg(FfxFsr4VkContext* c, uint32_t w, uint32_t h,
         vkDestroyImage(c->dev, *oi, c->alloc);
         *om = VK_NULL_HANDLE;
         *oi = VK_NULL_HANDLE;
+    } else {
+        *allocationSize = mr.size;
     }
     return r;
 }
@@ -551,7 +562,24 @@ static FfxVersionNumber cbGetSDKVersion(FfxInterface* I) {
 }
 
 static FfxErrorCode cbGetEffectGpuMemUsage(FfxInterface* I, FfxUInt32 id, FfxApiEffectMemoryUsage* o) {
-    (void)I;(void)id; if(o) memset(o,0,sizeof(*o)); return FFX_OK;
+    (void)id;
+    if (!I || !I->device || !o)
+        return FFX_ERROR_INVALID_POINTER;
+
+    /* Report allocations owned by this effect context.  These values are the
+     * Vulkan memory requirement sizes, so they include driver alignment but
+     * deliberately exclude descriptor-pool implementation storage. */
+    FfxFsr4VkContext* c = (FfxFsr4VkContext*)I->device;
+    uint64_t total = c->cbAllocationSize;
+    for (uint32_t i = 0; i < c->resCount; ++i)
+        if (!c->res[i].external)
+            total += c->res[i].allocationSize;
+    for (uint32_t i = 0; i < c->stagingCount; ++i)
+        total += c->staging[i].allocationSize;
+
+    o->totalUsageInBytes = total;
+    o->aliasableUsageInBytes = 0;
+    return FFX_OK;
 }
 
 static FfxErrorCode cbCreateBackendCtx(FfxInterface* I, FfxEffect eff,
@@ -668,7 +696,8 @@ static FfxErrorCode cbCreateRes(FfxInterface* I,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         VkResult vr = mkImg(c, desc->width, desc->height>0?desc->height:1,
-                            fmt, usage, &r->img, &r->mem, &r->view);
+                            fmt, usage, &r->img, &r->mem, &r->view,
+                            &r->allocationSize);
         if (vr) return FFX_ERROR_BACKEND_API_ERROR;
         r->kind=RES_IMAGE; r->fmt=fmt; r->w=desc->width; r->h=desc->height>0?desc->height:1;
         r->needsInit=1;  /* needs UNDEFINED→GENERAL transition before first use */
@@ -685,7 +714,8 @@ static FfxErrorCode cbCreateRes(FfxInterface* I,
         VkResult vr = mkBuf(c, sz,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT|
             VK_BUFFER_USAGE_TRANSFER_DST_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &r->buf, &r->mem);
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &r->buf, &r->mem,
+            &r->allocationSize);
         if (vr) return FFX_ERROR_BACKEND_API_ERROR;
         r->kind=RES_BUFFER; r->size=sz;
 
@@ -696,7 +726,7 @@ static FfxErrorCode cbCreateRes(FfxInterface* I,
             vr = mkBuf(c, desc->initDataSize,
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &pending.buf, &pending.mem);
+                &pending.buf, &pending.mem, &pending.allocationSize);
             if (vr) {
                 destroyResource(c, r);
                 return FFX_ERROR_BACKEND_API_ERROR;
@@ -1392,7 +1422,7 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
     r=mkBuf(c, CBUF_RING_BYTES,
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT|VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        &c->cbRing, &c->cbMem);
+        &c->cbRing, &c->cbMem, &c->cbAllocationSize);
     if (r) goto fail;
     r = vkMapMemory(c->dev, c->cbMem, 0, CBUF_RING_BYTES, 0,
                     (void**)&c->cbMap);
