@@ -63,11 +63,22 @@ int main(void)
             .results = { VK_SUCCESS, VK_SUCCESS }, .indices = { 1, 3 },
         };
         FfxVkFrameGenerationAcquiredPair pair;
+        FfxVkFrameGenerationPresentPlan plan;
         CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
             (VkSemaphore)(uintptr_t)1, (VkSemaphore)(uintptr_t)2, 4, &pair) == VK_SUCCESS);
         CHECK(sequence.calls == 2u);
         CHECK(pair.generatedImageAcquired && pair.realImageAcquired && pair.paired);
         CHECK(pair.generatedImageIndex == 1u && pair.realImageIndex == 3u);
+        CHECK(ffxVkFrameGenerationBuildPresentPlan(&pair, true, false, &plan));
+        CHECK(plan.slotCount == 2u);
+        CHECK(plan.slots[0].imageIndex == 1u &&
+              plan.slots[0].imageAvailableSemaphore == (VkSemaphore)(uintptr_t)1 &&
+              plan.slots[0].useInterpolatedScene);
+        CHECK(plan.slots[1].imageIndex == 3u &&
+              plan.slots[1].imageAvailableSemaphore == (VkSemaphore)(uintptr_t)2 &&
+              !plan.slots[1].useInterpolatedScene);
+        CHECK(ffxVkFrameGenerationBuildPresentPlan(&pair, true, true, &plan));
+        CHECK(plan.slotCount == 2u && !plan.slots[0].useInterpolatedScene);
     }
     {
         acquire_sequence_t sequence = {
@@ -83,11 +94,15 @@ int main(void)
             .results = { VK_SUCCESS, VK_NOT_READY }, .indices = { 2, 0 },
         };
         FfxVkFrameGenerationAcquiredPair pair;
+        FfxVkFrameGenerationPresentPlan plan;
         CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
             VK_NULL_HANDLE, VK_NULL_HANDLE, 4, &pair) == VK_NOT_READY);
         CHECK(sequence.calls == 2u);
         CHECK(pair.generatedImageAcquired && !pair.realImageAcquired && !pair.paired);
         CHECK(pair.generatedImageIndex == 2u);
+        CHECK(ffxVkFrameGenerationBuildPresentPlan(&pair, true, false, &plan));
+        CHECK(plan.slotCount == 1u && plan.slots[0].imageIndex == 2u &&
+              !plan.slots[0].useInterpolatedScene);
     }
     {
         acquire_sequence_t sequence = {
@@ -106,6 +121,7 @@ int main(void)
         CHECK(ffxVkFrameGenerationAcquirePair(acquire_sequence, &sequence,
             VK_NULL_HANDLE, VK_NULL_HANDLE, 4, &pair) == VK_ERROR_INITIALIZATION_FAILED);
         CHECK(pair.generatedImageAcquired && pair.realImageAcquired && !pair.paired);
+        CHECK(!ffxVkFrameGenerationBuildPresentPlan(&pair, true, false, NULL));
     }
 
     CHECK(ffxVkFrameGenerationShouldPresentGenerated(true, false));

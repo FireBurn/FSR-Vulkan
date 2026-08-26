@@ -95,6 +95,42 @@ VkResult ffxVkFrameGenerationAcquirePair(
         ? VK_SUBOPTIMAL_KHR : VK_SUCCESS;
 }
 
+bool ffxVkFrameGenerationBuildPresentPlan(
+    const FfxVkFrameGenerationAcquiredPair *acquiredPair,
+    bool interpolationDispatched,
+    bool reset,
+    FfxVkFrameGenerationPresentPlan *outPlan)
+{
+    if (!outPlan)
+        return false;
+    *outPlan = (FfxVkFrameGenerationPresentPlan) { 0 };
+    if (!acquiredPair || !acquiredPair->generatedImageAcquired)
+        return false;
+
+    outPlan->slots[0] = (FfxVkFrameGenerationPresentSlot) {
+        .imageIndex = acquiredPair->generatedImageIndex,
+        .imageAvailableSemaphore = acquiredPair->generatedAvailableSemaphore,
+        .useInterpolatedScene = acquiredPair->paired &&
+            ffxVkFrameGenerationShouldPresentGenerated(interpolationDispatched,
+                reset),
+    };
+    outPlan->slotCount = 1;
+
+    if (!acquiredPair->paired)
+        return !acquiredPair->realImageAcquired;
+    if (!acquiredPair->realImageAcquired ||
+        acquiredPair->generatedImageIndex == acquiredPair->realImageIndex)
+        return false;
+
+    outPlan->slots[1] = (FfxVkFrameGenerationPresentSlot) {
+        .imageIndex = acquiredPair->realImageIndex,
+        .imageAvailableSemaphore = acquiredPair->realAvailableSemaphore,
+        .useInterpolatedScene = false,
+    };
+    outPlan->slotCount = 2;
+    return true;
+}
+
 bool ffxVkFrameGenerationShouldPresentGenerated(bool interpolationDispatched,
                                                 bool reset)
 {

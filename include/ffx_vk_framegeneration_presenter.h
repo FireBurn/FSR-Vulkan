@@ -76,6 +76,35 @@ VkResult ffxVkFrameGenerationAcquirePair(
     uint32_t swapchainImageCount,
     FfxVkFrameGenerationAcquiredPair *outPair);
 
+/* The policy layer does not record a renderer's command buffers or submit to
+ * its queues, but it can make the acquired-image ownership explicit before
+ * the host does so. A one-slot plan means the first acquire must be rendered
+ * and presented normally. A two-slot plan is always ordered generated then
+ * real. The first slot may still use the real scene when interpolation was
+ * reset or rejected; it must nevertheless be submitted and presented so its
+ * acquired WSI image is released. */
+typedef struct FfxVkFrameGenerationPresentSlot {
+    uint32_t imageIndex;
+    VkSemaphore imageAvailableSemaphore;
+    bool useInterpolatedScene;
+} FfxVkFrameGenerationPresentSlot;
+
+typedef struct FfxVkFrameGenerationPresentPlan {
+    FfxVkFrameGenerationPresentSlot slots[2];
+    uint32_t slotCount;
+} FfxVkFrameGenerationPresentPlan;
+
+/* Build the exact render/present work plan from an acquire outcome. The
+ * caller records, submits, and presents each returned slot in order. This
+ * function returns false for an invalid/stranded pair (for example duplicate
+ * acquired image indices), so the host can recreate the swapchain instead of
+ * presenting only one of two acquired images. */
+bool ffxVkFrameGenerationBuildPresentPlan(
+    const FfxVkFrameGenerationAcquiredPair *acquiredPair,
+    bool interpolationDispatched,
+    bool reset,
+    FfxVkFrameGenerationPresentPlan *outPlan);
+
 /* A successful reset dispatch establishes interpolation history but has no
  * preceding image from which an intermediate image can be generated. Present
  * the real image for that paired slot and resume generation next frame. */
