@@ -10,8 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef FFX_VK_SOURCE_DIR
-#error "FFX_VK_SOURCE_DIR must identify the source tree for asset validation"
+#ifndef FFX_VK_FSR4_V07_TEST_ASSET_DIR
+#error "FFX_VK_FSR4_V07_TEST_ASSET_DIR must identify an external asset bundle"
 #endif
 
 #define CHECK(condition) do { \
@@ -27,8 +27,8 @@ static int read_shader(const char *name, FfxFsr4VkShaderBlob *out, void **storag
     FILE *file;
     long length;
     void *data;
-    const int written = snprintf(path, sizeof(path), "%s/baseq2/fsr4_shaders/%s",
-                                 FFX_VK_SOURCE_DIR, name);
+    const int written = snprintf(path, sizeof(path), "%s/%s",
+                                 FFX_VK_FSR4_V07_TEST_ASSET_DIR, name);
     if (written < 0 || (size_t)written >= sizeof(path) ||
         !(file = fopen(path, "rb")))
         return 0;

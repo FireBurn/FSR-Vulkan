@@ -257,6 +257,14 @@ The bundle is installed under `share/ffx-vulkan/fsr4-v07`; a consumer that uses
 `FFX_VK_FSR4_V07_ASSET_DIR`. The application remains responsible for passing
 the matching paths returned by `ffxFsr4V07BuildAssetSet` to the provider.
 
+The default source tree contains no source-v07 shader/model payload. Its
+payload-dependent SPIR-V layout test is therefore added only when
+`FFX_VK_PORTABLE_FSR4_V07_TEST_ASSET_DIR` names an external compatible bundle.
+Q2RTX's superproject supplies its locally installed bundle automatically; a
+standalone clone reports that the one test is skipped and still fully builds
+and tests the redistributable FSR3, presenter, RR-contract, and FSR4 host/API
+closure.
+
 The tests verify the complete patched-source and generated-file hash manifests,
 all 2,816 upscaler, 352 Frame Interpolation, and 56 Optical Flow valid
 pass/permutation lookups, and every unique SPIR-V module with `spirv-val` when
@@ -433,4 +441,6 @@ present.
   composed after interpolation.
 
 See [UPSTREAM.md](UPSTREAM.md) for the source/version import plan and license
-provenance.
+provenance. [NOTICE.md](NOTICE.md) describes the third-party and model-payload
+boundary, while [PUBLISHING.md](PUBLISHING.md) records the clean subtree split
+and standalone verification procedure.

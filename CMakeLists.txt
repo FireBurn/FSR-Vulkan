@@ -16,6 +16,22 @@ option(FFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS
     "Install a complete caller-supplied source-v07 FSR4 asset set with the package" OFF)
 set(FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR "" CACHE PATH
     "Directory containing one complete source-v07 FSR4 model asset set")
+set(FFX_VK_PORTABLE_FSR4_V07_TEST_ASSET_DIR "" CACHE PATH
+    "Optional source-v07 FSR4 shader bundle used only by the layout test")
+
+# The reusable project never carries the source-v07 model payload by default.
+# When built as Q2RTX's subdirectory, make its locally supplied bundle useful
+# for the exhaustive layout test; an extracted/published standalone tree has
+# no parent asset directory and therefore omits that one payload-dependent
+# test instead of secretly relying on Q2RTX files.
+if(NOT FFX_VK_PORTABLE_FSR4_V07_TEST_ASSET_DIR)
+    set(_ffx_vk_q2rtx_fsr4_test_assets
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../baseq2/fsr4_shaders")
+    if(EXISTS "${_ffx_vk_q2rtx_fsr4_test_assets}")
+        set(FFX_VK_PORTABLE_FSR4_V07_TEST_ASSET_DIR
+            "${_ffx_vk_q2rtx_fsr4_test_assets}")
+    endif()
+endif()
 
 find_package(Vulkan REQUIRED)
 
@@ -965,15 +981,21 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         set_tests_properties(ffx_vk_fsr4_v07_lifetime_test PROPERTIES
             RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
 
-        add_executable(ffx_vk_fsr4_v07_spirv_layout_test
-            tests/fsr4_v07_spirv_layout_test.c)
-        target_compile_definitions(ffx_vk_fsr4_v07_spirv_layout_test PRIVATE
-            FFX_VK_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../..")
-        target_link_libraries(ffx_vk_fsr4_v07_spirv_layout_test PRIVATE
-            ffx-vulkan::fsr4-v07-vulkan
-            ffx-vulkan::fsr4-v07-assets)
-        add_test(NAME ffx_vk_fsr4_v07_spirv_layout_test
-            COMMAND ffx_vk_fsr4_v07_spirv_layout_test)
+        if(FFX_VK_PORTABLE_FSR4_V07_TEST_ASSET_DIR AND
+           EXISTS "${FFX_VK_PORTABLE_FSR4_V07_TEST_ASSET_DIR}")
+            add_executable(ffx_vk_fsr4_v07_spirv_layout_test
+                tests/fsr4_v07_spirv_layout_test.c)
+            target_compile_definitions(ffx_vk_fsr4_v07_spirv_layout_test PRIVATE
+                FFX_VK_FSR4_V07_TEST_ASSET_DIR="${FFX_VK_PORTABLE_FSR4_V07_TEST_ASSET_DIR}")
+            target_link_libraries(ffx_vk_fsr4_v07_spirv_layout_test PRIVATE
+                ffx-vulkan::fsr4-v07-vulkan
+                ffx-vulkan::fsr4-v07-assets)
+            add_test(NAME ffx_vk_fsr4_v07_spirv_layout_test
+                COMMAND ffx_vk_fsr4_v07_spirv_layout_test)
+        else()
+            message(STATUS
+                "Skipping FSR4 v07 SPIR-V layout test: no external source-v07 asset bundle")
+        endif()
     endif()
 
     add_executable(ffx_vk_framegeneration_presenter_policy_test
