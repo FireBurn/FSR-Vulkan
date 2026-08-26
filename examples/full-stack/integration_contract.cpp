@@ -26,6 +26,24 @@ int main()
         ffxVkFrameGenerationRequiredImageCount(3u, true) != 5u)
         return 2;
 
+    FfxVkFrameGenerationAcquiredPair acquired_pair{};
+    acquired_pair.generatedImageIndex = 1u;
+    acquired_pair.realImageIndex = 3u;
+    acquired_pair.generatedAvailableSemaphore =
+        reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(1u));
+    acquired_pair.realAvailableSemaphore =
+        reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(2u));
+    acquired_pair.generatedImageAcquired = true;
+    acquired_pair.realImageAcquired = true;
+    acquired_pair.paired = true;
+    FfxVkFrameGenerationPresentPlan present_plan{};
+    if (!ffxVkFrameGenerationBuildPresentPlan(&acquired_pair, true, false,
+                                               &present_plan) ||
+        present_plan.slotCount != 2u ||
+        !present_plan.slots[0].useInterpolatedScene ||
+        present_plan.slots[1].useInterpolatedScene)
+        return 2;
+
     /* Taking function addresses forces linker resolution of both SDK-2.3
      * reusable APIs without fabricating invalid Vulkan handles. */
     auto fsr3_portable_memory = &ffxVkPortableUpscaleContextGetMemoryUsage;
@@ -36,8 +54,9 @@ int main()
     auto rr_validate = &ffxVkRayRegenerationValidateInputs;
     auto camera_cut = &ffxVkTemporalCameraCutDetected;
     auto acquire_pair = &ffxVkFrameGenerationAcquirePair;
+    auto build_present_plan = &ffxVkFrameGenerationBuildPresentPlan;
     return fsr3_portable_memory != nullptr && fsr3_create != nullptr &&
            fsr3_memory != nullptr && fi_create != nullptr && fi_memory != nullptr &&
            rr_validate != nullptr && camera_cut != nullptr &&
-           acquire_pair != nullptr ? 0 : 3;
+           acquire_pair != nullptr && build_present_plan != nullptr ? 0 : 3;
 }

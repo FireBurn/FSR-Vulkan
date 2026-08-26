@@ -33,6 +33,21 @@ int main(void)
         ffxVkFrameGenerationRenderFinishedSemaphoreIndex(1u, 0u, 1u) != 1u)
         return 2;
 
+    FfxVkFrameGenerationAcquiredPair acquired_pair = {
+        .generatedImageIndex = 0u,
+        .realImageIndex = 1u,
+        .generatedImageAcquired = true,
+        .realImageAcquired = true,
+        .paired = true,
+    };
+    FfxVkFrameGenerationPresentPlan present_plan = {0};
+    if (!ffxVkFrameGenerationBuildPresentPlan(&acquired_pair, true, false,
+                                               &present_plan) ||
+        present_plan.slotCount != 2u ||
+        !present_plan.slots[0].useInterpolatedScene ||
+        present_plan.slots[1].useInterpolatedScene)
+        return 2;
+
     /* Context creation copies the caller's interface; no Q2RTX global exists. */
     ffxFsr4V07SetBackendInterface(&interface);
     ffxFsr4V07SetBackendInterface(NULL);
