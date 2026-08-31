@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <iterator>
 #include <vector>
 
 namespace {
@@ -51,10 +52,12 @@ struct BridgeConstantBuffer {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0u;
+    uint64_t frameId = 0u;
 };
 
 struct BridgeDescriptorSet {
     FfxVkFsr3_3_1_5DescriptorSet descriptorSet{};
+    uint64_t frameId = 0u;
 };
 
 } // namespace
@@ -73,6 +76,7 @@ struct FfxVkFsr3_3_1_5Bridge {
     std::vector<std::unique_ptr<BridgeDescriptorSet>> descriptorSets;
     std::vector<FfxGpuJobDescription> jobs;
     std::vector<int32_t> registeredImportedResources;
+    uint64_t activeFrameId = 0u;
 
     FfxVkFsr3_3_1_5Bridge(VkPhysicalDevice inPhysicalDevice,
                            VkDevice inDevice,
@@ -474,6 +478,7 @@ static bool record_compute_job(FfxVkFsr3_3_1_5Bridge* bridge,
     vkCmdDispatch(commandBuffer, job.dimensions[0], job.dimensions[1], job.dimensions[2]);
     {
         std::lock_guard<std::mutex> lock(bridge->mutex);
+        descriptorSet->frameId = bridge->activeFrameId;
         bridge->descriptorSets.emplace_back(std::move(descriptorSet));
     }
     return true;
@@ -846,6 +851,7 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeStageConstantBufferData(
     }
     vkUnmapMemory(bridge->device, constantBuffer->memory);
     constantBuffer->size = size;
+    constantBuffer->frameId = bridge->activeFrameId;
     outConstantBuffer->num32BitEntries = size / sizeof(uint32_t);
     outConstantBuffer->data = reinterpret_cast<uint32_t*>(constantBuffer.get());
     {
@@ -853,6 +859,45 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeStageConstantBufferData(
         bridge->constantBuffers.emplace_back(std::move(constantBuffer));
     }
     return FFX_OK;
+}
+
+extern "C" void ffxVkFsr3_3_1_5BridgeBeginFrame(FfxVkFsr3_3_1_5Bridge* bridge,
+                                                   uint64_t frameId)
+{
+    if (!bridge)
+        return;
+    std::lock_guard<std::mutex> lock(bridge->mutex);
+    bridge->activeFrameId = frameId;
+}
+
+extern "C" void ffxVkFsr3_3_1_5BridgeRetireFrame(FfxVkFsr3_3_1_5Bridge* bridge,
+                                                    uint64_t completedFrameId)
+{
+    if (!bridge || !completedFrameId)
+        return;
+    std::vector<std::unique_ptr<BridgeDescriptorSet>> descriptorSets;
+    std::vector<std::unique_ptr<BridgeConstantBuffer>> constantBuffers;
+    {
+        std::lock_guard<std::mutex> lock(bridge->mutex);
+        auto descriptorEnd = std::stable_partition(bridge->descriptorSets.begin(),
+            bridge->descriptorSets.end(), [completedFrameId](const std::unique_ptr<BridgeDescriptorSet>& item) {
+                return !item || item->frameId == 0u || item->frameId > completedFrameId;
+            });
+        descriptorSets.assign(std::make_move_iterator(descriptorEnd),
+                              std::make_move_iterator(bridge->descriptorSets.end()));
+        bridge->descriptorSets.erase(descriptorEnd, bridge->descriptorSets.end());
+        auto constantEnd = std::stable_partition(bridge->constantBuffers.begin(),
+            bridge->constantBuffers.end(), [completedFrameId](const std::unique_ptr<BridgeConstantBuffer>& item) {
+                return !item || item->frameId == 0u || item->frameId > completedFrameId;
+            });
+        constantBuffers.assign(std::make_move_iterator(constantEnd),
+                               std::make_move_iterator(bridge->constantBuffers.end()));
+        bridge->constantBuffers.erase(constantEnd, bridge->constantBuffers.end());
+    }
+    for (const std::unique_ptr<BridgeDescriptorSet>& item : descriptorSets)
+        destroy_descriptor_set(item.get());
+    for (const std::unique_ptr<BridgeConstantBuffer>& item : constantBuffers)
+        destroy_constant_buffer(bridge, item.get());
 }
 
 extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeCreateResource(

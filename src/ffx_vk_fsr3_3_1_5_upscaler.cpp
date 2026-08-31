@@ -209,6 +209,7 @@ extern "C" FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextRecordDispatch(
         dispatchInfo->upscaleWidth == 0u || dispatchInfo->upscaleHeight == 0u ||
         dispatchInfo->preExposure <= 0.0f || dispatchInfo->frameTimeMilliseconds <= 0.0f)
         return FFX_VK_FSR3_3_1_5_ERROR_INVALID_ARGUMENT;
+    ffxVkFsr3_3_1_5BridgeBeginFrame(context->bridge, dispatchInfo->frameId);
     FfxFsr3UpscalerDispatchDescription dispatch{};
     dispatch.commandList = reinterpret_cast<FfxCommandList>(dispatchInfo->commandBuffer);
     dispatch.color = ffxVkFsr3_3_1_5BridgeResolveResource(context->bridge, dispatchInfo->color);
@@ -241,6 +242,13 @@ extern "C" FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextRecordDispatch(
     dispatch.viewSpaceToMetersFactor = dispatchInfo->viewSpaceToMeters;
     dispatch.flags = dispatchInfo->flags;
     return result_from_ffx(ffxFsr3UpscalerContextDispatch(&context->context, &dispatch));
+}
+
+extern "C" void ffxVkFsr3_3_1_5UpscalerContextRetireFrame(
+    FfxVkFsr3_3_1_5UpscalerContext* context, uint64_t completedFrameId)
+{
+    if (context && context->created)
+        ffxVkFsr3_3_1_5BridgeRetireFrame(context->bridge, completedFrameId);
 }
 
 extern "C" void ffxVkFsr3_3_1_5UpscalerContextDestroy(

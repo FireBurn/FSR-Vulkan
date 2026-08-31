@@ -88,6 +88,10 @@ typedef struct FfxVkFsr3_3_1_5UpscalerDispatchInfo {
     float cameraVerticalFovRadians;
     float viewSpaceToMeters;
     uint32_t flags;
+    /* Monotonic caller frame ID. The caller retires this dispatch after its
+     * submission fence signals, allowing transient descriptor/constant data
+     * to be recycled instead of accumulating for the context lifetime. */
+    uint64_t frameId;
 } FfxVkFsr3_3_1_5UpscalerDispatchInfo;
 
 typedef struct FfxVkFsr3_3_1_5SharedResourceDescriptions {
@@ -132,6 +136,12 @@ FfxVkFsr3_3_1_5Bridge* ffxVkFsr3_3_1_5CreateBridgeWithPhysicalDevice(
 
 void ffxVkFsr3_3_1_5DestroyBridge(FfxVkFsr3_3_1_5Bridge* bridge);
 
+/* Low-level bridge frame boundary used by the opaque upscaler lifecycle. */
+void ffxVkFsr3_3_1_5BridgeBeginFrame(FfxVkFsr3_3_1_5Bridge* bridge,
+                                     uint64_t frameId);
+void ffxVkFsr3_3_1_5BridgeRetireFrame(FfxVkFsr3_3_1_5Bridge* bridge,
+                                      uint64_t completedFrameId);
+
 /* Resolve an API resource token returned by the bridge to its native image.
  * The bridge retains ownership; callers may use this only while the resource
  * and bridge remain alive.  It is primarily useful for portable diagnostics,
@@ -172,6 +182,11 @@ FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextGetMemoryUsage(
 FfxVkFsr3_3_1_5Result ffxVkFsr3_3_1_5UpscalerContextRecordDispatch(
     FfxVkFsr3_3_1_5UpscalerContext* context,
     const FfxVkFsr3_3_1_5UpscalerDispatchInfo* dispatchInfo);
+
+/* Retire all transient descriptor sets and constant buffers recorded through
+ * completedFrameId after the matching GPU submission fence has signaled. */
+void ffxVkFsr3_3_1_5UpscalerContextRetireFrame(
+    FfxVkFsr3_3_1_5UpscalerContext* context, uint64_t completedFrameId);
 
 void ffxVkFsr3_3_1_5UpscalerContextDestroy(
     FfxVkFsr3_3_1_5UpscalerContext* context);
