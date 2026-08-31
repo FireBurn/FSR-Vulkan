@@ -18,3 +18,6 @@ Link `ffx-vulkan::effects` in a C++ Vulkan application for the complete tested
 FSR3.1.4, FSR3.1.5, FSR3.1.6 FI/OF, source-v07 FSR4, and frame-generation WSI
 policy closure. The application remains responsible for Vulkan device/queue,
 external-image state, fences, and presentation integration.
+
+The top-level portable CTest suite also copies this directory to an isolated
+location, installs the package to a separate prefix, and builds/runs the copy.

@@ -659,6 +659,20 @@ endif()
 if(FFX_VK_PORTABLE_BUILD_TESTS)
     enable_testing()
 
+    # An installed package must be consumable without the source tree. Keep
+    # this top-level-only: when Q2RTX vendors the project its own install tree
+    # and test driver are outside this reusable package's ownership.
+    if(FFX_VK_PORTABLE_INSTALL AND
+       CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME ffx_vk_installed_full_stack_consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DFFX_VK_PACKAGE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DFFX_VK_PACKAGE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_full_stack_consumer.cmake")
+        set_tests_properties(ffx_vk_installed_full_stack_consumer PROPERTIES
+            RUN_SERIAL TRUE)
+    endif()
+
     add_executable(ffx_vk_rayregeneration_contract_test
         tests/rayregeneration_contract_test.c)
     target_link_libraries(ffx_vk_rayregeneration_contract_test PRIVATE
