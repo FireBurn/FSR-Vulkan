@@ -1258,6 +1258,32 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
                 if (resource->image != VK_NULL_HANDLE &&
                     !ensure_image_layout(commandBuffer, resource, image_layout(barrier.newState)))
                     return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
+                /* A same-layout transition (most often GENERAL -> GENERAL)
+                 * is still a real memory dependency.  The previous bridge
+                 * treated it as a no-op because ensure_image_layout only
+                 * emits a barrier for a layout change.  That leaves a later
+                 * FI/OF compute pass free to read stale UAV writes, which on
+                 * RADV manifests as a completely black generated frame. */
+                if (resource->image != VK_NULL_HANDLE) {
+                    VkImageMemoryBarrier memoryBarrier{};
+                    memoryBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                        VK_ACCESS_SHADER_WRITE_BIT;
+                    memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                        VK_ACCESS_SHADER_WRITE_BIT;
+                    memoryBarrier.oldLayout = resource->imageLayout;
+                    memoryBarrier.newLayout = resource->imageLayout;
+                    memoryBarrier.image = resource->image;
+                    memoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    memoryBarrier.subresourceRange.levelCount =
+                        resource->description.mipCount;
+                    memoryBarrier.subresourceRange.layerCount =
+                        resource->description.depth ? resource->description.depth : 1u;
+                    vkCmdPipelineBarrier(commandBuffer,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
+                        0u, nullptr, 1u, &memoryBarrier);
+                }
                 resource->currentState = barrier.newState;
             } else {
                 VkMemoryBarrier memoryBarrier{};
