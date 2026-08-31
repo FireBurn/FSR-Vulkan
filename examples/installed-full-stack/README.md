@@ -1,7 +1,8 @@
 # Installed full-stack FSR Vulkan contract
 
 This verifies the complete FSR3 + source-v07 FSR4 CMake package from a clean
-consumer build. It does not use the vendored source tree after installation.
+consumer build. The directory is self-contained: it does not include source
+files from another example or use the vendored SDK tree after installation.
 
 ```sh
 cmake -S extern/ffx-vulkan -B build/ffx-vulkan
