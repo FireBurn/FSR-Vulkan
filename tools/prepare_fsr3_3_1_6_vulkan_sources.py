@@ -105,7 +105,7 @@ def main() -> int:
         fi_source = replace_exact(
             fi_source,
             "RWTexture2D<FfxFloat32x3> rw_output          FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);",
-            '[[vk::image_format("rgba16f")]] RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);',
+            '[[vk::image_format("unknown")]] RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);',
             1,
         )
         fi_source = replace_exact(
@@ -123,7 +123,7 @@ def main() -> int:
         fi_source = replace_exact(
             fi_source,
             "#elif defined(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT)\n    RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);",
-            '#elif defined(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT)\n    [[vk::image_format("rgba16f")]] RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);',
+            '#elif defined(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT)\n    [[vk::image_format("unknown")]] RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);',
             1,
         )
         for mip in tuple(range(5)) + tuple(range(6, 13)):

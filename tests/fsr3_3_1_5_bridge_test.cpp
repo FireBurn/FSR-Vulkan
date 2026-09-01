@@ -281,7 +281,7 @@ bool dispatch_fi_of_reset_frame(
              ffxFrameInterpolationGetSharedResourceDescriptions(frameInterpolation, &fiShared) == FFX_OK;
     }
     if (ok) {
-        descriptions[0] = {VK_FORMAT_R8G8B8A8_UNORM, 128u, 128u, false};
+        descriptions[0] = {VK_FORMAT_R16G16B16A16_SFLOAT, 128u, 128u, false};
         descriptions[1] = {vk_format_from_ffx(ofShared.opticalFlowVector.resourceDescription.format),
                            ofShared.opticalFlowVector.resourceDescription.width,
                            ofShared.opticalFlowVector.resourceDescription.height, true};
@@ -299,7 +299,7 @@ bool dispatch_fi_of_reset_frame(
         descriptions[7] = {vk_format_from_ffx(fiShared.reconstructedPrevNearestDepth.resourceDescription.format),
                            fiShared.reconstructedPrevNearestDepth.resourceDescription.width,
                            fiShared.reconstructedPrevNearestDepth.resourceDescription.height, true};
-        descriptions[8] = {VK_FORMAT_R8G8B8A8_UNORM, 128u, 128u, true};
+        descriptions[8] = {VK_FORMAT_R16G16B16A16_SFLOAT, 128u, 128u, true};
     }
     for (uint32_t index = 0u; ok && index < 9u; ++index) {
         const VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
@@ -740,9 +740,9 @@ int main()
             frameInterpolationDescription.backendInterface = backend;
             frameInterpolationDescription.maxRenderSize = {64u, 64u};
             frameInterpolationDescription.displaySize = {128u, 128u};
-            frameInterpolationDescription.backBufferFormat = FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
+            frameInterpolationDescription.backBufferFormat = FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
             frameInterpolationDescription.previousInterpolationSourceFormat =
-                FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
+                FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
             if (!expect(ffxOpticalflowContextCreate(&opticalFlow, &opticalFlowDescription) == FFX_OK,
                         "create FI/OF optical-flow Vulkan context") ||
                 !expect(ffxFrameInterpolationContextCreate(

@@ -202,11 +202,13 @@ individual MIT grant, refuses to overwrite a modified import, and records the
 166 pristine source hashes in `ORIGINAL_SHA256SUMS`. The three public DX12
 backend source files are retained strictly as the authoritative ABI reference;
 they are not built on Vulkan. `CURRENT_SHA256SUMS`
-records six narrow Linux-port changes: the non-Windows empty `FFX_API_ENTRY`,
+records the documented narrow Linux-port changes: the non-Windows empty `FFX_API_ENTRY`,
 the larger opaque context budget required by four-byte `wchar_t`, the
-compile-time exclusion of the unpublished AMD watermark/git-header path, and
-three documented portability/callback fixes in the FSR3 upscaler source and
-its HLSL callback declarations.
+compile-time exclusion of the unpublished AMD watermark/git-header path, three
+documented portability/callback fixes in the FSR3 upscaler source and its HLSL
+callback declarations, and FI/OF error propagation. The latter ensures a
+portable Vulkan bridge failure cannot be silently presented as an undefined
+generated frame.
 
 The v2.3 Frame Interpolation 3.1.6 and Optical Flow sources are imported for
 the reusable analytical-FG port. They compile as the separate object-only
