@@ -406,10 +406,16 @@ static bool record_compute_job(FfxVkFsr3_3_1_5Bridge* bridge,
                 return false;
             const FfxTextureUAV& uav = job.uavTextures[uavIndex++];
             BridgeResource* resource = lookup_resource(bridge, uav.resource.internalIndex);
-            if (!resource || uav.mip >= resource->uavViews.size() ||
+            if (!resource || resource->uavViews.empty() ||
                 !ensure_image_layout(commandBuffer, resource, VK_IMAGE_LAYOUT_GENERAL))
                 return false;
-            descriptor.imageView = resource->uavViews[uav.mip];
+            /* FI shaders statically declare its full 13-level SPD pyramid,
+             * while a smaller display allocation has fewer legal Vulkan mips.
+             * The SDK's dispatch constants prevent accesses to those inactive
+             * tail bindings. Bind the final real mip for them so the complete
+             * descriptor ABI remains valid without creating illegal views. */
+            descriptor.imageView = resource->uavViews[std::min<size_t>(
+                uav.mip, resource->uavViews.size() - 1u)];
             descriptor.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             ++descriptorCount;
             break;
@@ -419,11 +425,18 @@ static bool record_compute_job(FfxVkFsr3_3_1_5Bridge* bridge,
                 return false;
             const FfxBufferSRV& srv = job.srvBuffers[srvBufferIndex++];
             BridgeResource* resource = lookup_resource(bridge, srv.resource.internalIndex);
-            if (!resource || resource->buffer == VK_NULL_HANDLE || srv.size == 0u)
+            if (!resource || resource->buffer == VK_NULL_HANDLE ||
+                srv.offset >= resource->description.width)
                 return false;
             descriptor.buffer = resource->buffer;
             descriptor.bufferOffset = srv.offset;
-            descriptor.bufferRange = srv.size;
+            /* SDK buffer views use zero to mean the remaining buffer.  The
+             * FI counters binding relies on that convention; rejecting it
+             * aborted the dispatch before it could write a generated frame. */
+            descriptor.bufferRange = srv.size ? srv.size :
+                resource->description.width - srv.offset;
+            if (descriptor.bufferRange == 0u)
+                return false;
             ++descriptorCount;
             break;
         }
@@ -432,11 +445,15 @@ static bool record_compute_job(FfxVkFsr3_3_1_5Bridge* bridge,
                 return false;
             const FfxBufferUAV& uav = job.uavBuffers[uavBufferIndex++];
             BridgeResource* resource = lookup_resource(bridge, uav.resource.internalIndex);
-            if (!resource || resource->buffer == VK_NULL_HANDLE || uav.size == 0u)
+            if (!resource || resource->buffer == VK_NULL_HANDLE ||
+                uav.offset >= resource->description.width)
                 return false;
             descriptor.buffer = resource->buffer;
             descriptor.bufferOffset = uav.offset;
-            descriptor.bufferRange = uav.size;
+            descriptor.bufferRange = uav.size ? uav.size :
+                resource->description.width - uav.offset;
+            if (descriptor.bufferRange == 0u)
+                return false;
             ++descriptorCount;
             break;
         }
@@ -1201,32 +1218,57 @@ extern "C" FfxErrorCode ffxVkFsr3_3_1_5BridgeExecuteGpuJobs(
         case FFX_GPU_JOB_COPY: {
             BridgeResource* source = lookup_resource(bridge, job.copyJobDescriptor.src.internalIndex);
             BridgeResource* destination = lookup_resource(bridge, job.copyJobDescriptor.dst.internalIndex);
-            if (!source || !destination || source->buffer == VK_NULL_HANDLE ||
-                destination->image == VK_NULL_HANDLE || job.copyJobDescriptor.size == 0u)
+            if (!source || !destination)
                 return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
-            VkBufferMemoryBarrier sourceBarrier{};
-            sourceBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            sourceBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-            sourceBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            sourceBarrier.buffer = source->buffer;
-            sourceBarrier.offset = job.copyJobDescriptor.srcOffset;
-            sourceBarrier.size = job.copyJobDescriptor.size;
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u, nullptr,
-                                 1u, &sourceBarrier, 0u, nullptr);
-            if (!ensure_image_layout(commandBuffer, destination,
-                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL))
+            if (source->buffer != VK_NULL_HANDLE && destination->image != VK_NULL_HANDLE &&
+                job.copyJobDescriptor.size != 0u) {
+                VkBufferMemoryBarrier sourceBarrier{};
+                sourceBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                sourceBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+                sourceBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                sourceBarrier.buffer = source->buffer;
+                sourceBarrier.offset = job.copyJobDescriptor.srcOffset;
+                sourceBarrier.size = job.copyJobDescriptor.size;
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u, nullptr,
+                                     1u, &sourceBarrier, 0u, nullptr);
+                if (!ensure_image_layout(commandBuffer, destination,
+                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL))
+                    return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
+                VkBufferImageCopy copy{};
+                copy.bufferOffset = job.copyJobDescriptor.srcOffset;
+                copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                copy.imageSubresource.layerCount = destination->description.depth ?
+                    destination->description.depth : 1u;
+                copy.imageExtent = {destination->description.width, destination->description.height, 1u};
+                vkCmdCopyBufferToImage(commandBuffer, source->buffer, destination->image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
+                if (!ensure_image_layout(commandBuffer, destination,
+                                         image_layout(destination->currentState)))
+                    return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
+                break;
+            }
+
+            /* FSR frame interpolation retains the current interpolation source
+             * as its next-frame history with an image-to-image copy.  This is
+             * distinct from the buffer upload above: treating it as an upload
+             * silently dropped the history job and produced black generated
+             * frames on RADV. */
+            if (source->image == VK_NULL_HANDLE || destination->image == VK_NULL_HANDLE ||
+                !ensure_image_layout(commandBuffer, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) ||
+                !ensure_image_layout(commandBuffer, destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL))
                 return static_cast<FfxErrorCode>(FFX_ERROR_INVALID_ARGUMENT);
-            VkBufferImageCopy copy{};
-            copy.bufferOffset = job.copyJobDescriptor.srcOffset;
-            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copy.imageSubresource.layerCount = destination->description.depth ?
-                destination->description.depth : 1u;
-            copy.imageExtent = {destination->description.width, destination->description.height, 1u};
-            vkCmdCopyBufferToImage(commandBuffer, source->buffer, destination->image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
-            const VkImageLayout finalLayout = image_layout(destination->currentState);
-            if (!ensure_image_layout(commandBuffer, destination, finalLayout))
+            VkImageCopy copy{};
+            copy.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy.srcSubresource.layerCount = std::min(source->description.depth ? source->description.depth : 1u,
+                                                       destination->description.depth ? destination->description.depth : 1u);
+            copy.dstSubresource = copy.srcSubresource;
+            copy.extent = {std::min(source->description.width, destination->description.width),
+                           std::min(source->description.height, destination->description.height), 1u};
+            vkCmdCopyImage(commandBuffer, source->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           destination->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
+            if (!ensure_image_layout(commandBuffer, source, image_layout(source->currentState)) ||
+                !ensure_image_layout(commandBuffer, destination, image_layout(destination->currentState)))
                 return static_cast<FfxErrorCode>(FFX_ERROR_BACKEND_API_ERROR);
             break;
         }

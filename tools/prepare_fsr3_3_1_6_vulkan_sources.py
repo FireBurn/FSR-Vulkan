@@ -87,6 +87,59 @@ def main() -> int:
             '[[vk::image_format("rg16f")]] RWTexture2D<FfxFloat32x2> rw_dilated_motion_vectors',
             1,
         )
+        # These resources have compact Vulkan allocations.  HLSL defaults to
+        # 32-bit storage-image formats, which is valid for DX12 but makes the
+        # generated SPIR-V write an incompatible image type on Vulkan.
+        fi_source = replace_exact(
+            fi_source,
+            "RWTexture2D<FfxFloat32x2> rw_disocclusion_mask",
+            '[[vk::image_format("rg8")]] RWTexture2D<FfxFloat32x2> rw_disocclusion_mask',
+            1,
+        )
+        fi_source = replace_exact(
+            fi_source,
+            "RWTexture2D<FfxFloat32>   rw_inpainting_mask",
+            '[[vk::image_format("r8")]] RWTexture2D<FfxFloat32> rw_inpainting_mask',
+            1,
+        )
+        fi_source = replace_exact(
+            fi_source,
+            "RWTexture2D<FfxFloat32x3> rw_output          FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);",
+            '[[vk::image_format("rgba16f")]] RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);',
+            1,
+        )
+        fi_source = replace_exact(
+            fi_source,
+            "return FfxFloat32x4(rw_output[iPxPos], rw_inpainting_mask[iPxPos]);",
+            "return FfxFloat32x4(rw_output[iPxPos].rgb, rw_inpainting_mask[iPxPos]);",
+            1,
+        )
+        fi_source = replace_exact(
+            fi_source,
+            "rw_output[iPxPos] = val.rgb;",
+            "rw_output[iPxPos] = FfxFloat32x4(val.rgb, 0.0f);",
+            1,
+        )
+        fi_source = replace_exact(
+            fi_source,
+            "#elif defined(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT)\n    RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);",
+            '#elif defined(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT)\n    [[vk::image_format("rgba16f")]] RWTexture2D<FfxFloat32x4> rw_output FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT);',
+            1,
+        )
+        for mip in tuple(range(5)) + tuple(range(6, 13)):
+            spacing = "   " if mip < 10 else "  "
+            fi_source = replace_exact(
+                fi_source,
+                f"RWTexture2D<FfxFloat32x4>                   rw_inpainting_pyramid{mip}{spacing}FFX_DECLARE_UAV(",
+                f'[[vk::image_format("rgba16f")]] RWTexture2D<FfxFloat32x4> rw_inpainting_pyramid{mip} FFX_DECLARE_UAV(',
+                1,
+            )
+        fi_source = replace_exact(
+            fi_source,
+            "globallycoherent RWTexture2D<FfxFloat32x4>  rw_inpainting_pyramid5",
+            '[[vk::image_format("rgba16f")]] globallycoherent RWTexture2D<FfxFloat32x4> rw_inpainting_pyramid5',
+            1,
+        )
         fi_output = output_root / "frameinterpolation"
         fi_output.mkdir(parents=True, exist_ok=False)
         (fi_output / fi_source_path.name).write_text(fi_source, encoding="utf-8")
