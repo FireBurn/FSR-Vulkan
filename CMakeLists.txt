@@ -84,8 +84,8 @@ else()
         -Wall -Wextra -Wpedantic)
 endif()
 
-# A common, testable reset decision keeps an application's upscaler, denoiser,
-# and frame generator from disagreeing about camera discontinuities.
+# Common, testable reset decisions keep an application's upscaler, denoiser,
+# and frame generator from disagreeing about camera or presentation gaps.
 add_library(ffx_vulkan_temporal_lifecycle STATIC
     src/ffx_vk_temporal_lifecycle.c)
 add_library(ffx-vulkan::temporal-lifecycle ALIAS ffx_vulkan_temporal_lifecycle)

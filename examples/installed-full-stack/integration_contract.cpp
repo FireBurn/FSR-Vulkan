@@ -55,10 +55,12 @@ int main()
     auto fi_memory = &ffxVkFsr3_3_1_6FrameGenerationContextGetMemoryUsage;
     auto rr_validate = &ffxVkRayRegenerationValidateInputs;
     auto camera_cut = &ffxVkTemporalCameraCutDetected;
+    auto presentation_changed = &ffxVkTemporalPresentationAvailabilityChanged;
     auto acquire_pair = &ffxVkFrameGenerationAcquirePair;
     auto build_present_plan = &ffxVkFrameGenerationBuildPresentPlan;
     return fsr3_portable_memory != nullptr && fsr3_create != nullptr &&
            fsr3_memory != nullptr && fi_create != nullptr && fi_memory != nullptr &&
            rr_validate != nullptr && camera_cut != nullptr &&
+           presentation_changed != nullptr &&
            acquire_pair != nullptr && build_present_plan != nullptr ? 0 : 3;
 }

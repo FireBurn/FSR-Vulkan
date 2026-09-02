@@ -36,6 +36,13 @@ typedef struct FfxVkTemporalCameraState {
 bool ffxVkTemporalCameraCutDetected(const FfxVkTemporalCameraState *current,
                                     const FfxVkTemporalCameraState *previous);
 
+/* Returns true exactly when presentation availability changes. A host maps
+ * window focus/visibility, swapchain suspension, or another compositor/WSI
+ * availability signal to these booleans and forwards a reset to every temporal
+ * provider on either edge. It intentionally has no platform or Vulkan types. */
+bool ffxVkTemporalPresentationAvailabilityChanged(bool previousAvailable,
+                                                  bool currentAvailable);
+
 #ifdef __cplusplus
 }
 #endif

@@ -52,5 +52,10 @@ int main(void)
     current.position[0] = NAN;
     CHECK(ffxVkTemporalCameraCutDetected(&current, &previous));
     CHECK(ffxVkTemporalCameraCutDetected(NULL, &previous));
+
+    CHECK(!ffxVkTemporalPresentationAvailabilityChanged(true, true));
+    CHECK(!ffxVkTemporalPresentationAvailabilityChanged(false, false));
+    CHECK(ffxVkTemporalPresentationAvailabilityChanged(true, false));
+    CHECK(ffxVkTemporalPresentationAvailabilityChanged(false, true));
     return 0;
 }

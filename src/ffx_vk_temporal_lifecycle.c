@@ -43,3 +43,9 @@ bool ffxVkTemporalCameraCutDetected(const FfxVkTemporalCameraState *current,
         forward_dot < FFX_VK_TEMPORAL_CAMERA_CUT_FORWARD_DOT_MIN ||
         fov_delta > FFX_VK_TEMPORAL_CAMERA_CUT_FOV_DELTA_RADIANS + fov_epsilon;
 }
+
+bool ffxVkTemporalPresentationAvailabilityChanged(bool previousAvailable,
+                                                  bool currentAvailable)
+{
+    return previousAvailable != currentAvailable;
+}

@@ -441,7 +441,10 @@ present.
   classifier used by Q2RTX: a teleport over 256 application world units, turn
   over 90 degrees, lens jump over 0.35 radians, or non-finite camera state.
   Supply normalized forward vectors and forward its result as `reset` to every
-  temporal provider for that rendered frame.
+  temporal provider for that rendered frame. Its presentation-availability
+  helper likewise reports either edge of a host-provided focus, visibility, or
+  WSI availability change, so every temporal provider can reset before paired
+  presentation resumes.
 - FSR input color is linear scene color.  UI is supplied separately and
   composed after interpolation.
 
