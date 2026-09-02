@@ -46,6 +46,20 @@ The presenter will use an explicit API rather than impersonating a Vulkan
 swapchain handle.  That makes queue ownership and synchronization visible and
 avoids the Windows-only behavior in AMD's old Vulkan swapchain reference.
 
+## Feature availability
+
+| Feature | Reusable Vulkan status | Important boundary |
+| --- | --- | --- |
+| FSR3 1.1.4 / 3.1.5 temporal upscaling | Runnable native Vulkan compute | Public-source implementation; choose the versioned opaque API required by the host. |
+| FSR3 3.1.6 Optical Flow / Frame Interpolation | Runnable native Vulkan compute plus WSI policy helpers | The host owns acquire, submit, present, UI composition, and pacing; a generated frame is never a replacement for a required real frame. |
+| FSR4 v07 INT8/DOT4 | Runnable experimental Vulkan provider | Requires a complete externally supplied, same-preset v07 shader/model bundle; it is not AMD FSR 4.1.1. |
+| Ray-Regeneration-style inputs | Runnable provider-neutral validation contract | Validates inputs/outputs only; it does not denoise, own models, or imply an AMD neural provider. |
+| Official FSR 4.1.1, ML Frame Generation, Ray Regeneration | Not provided by this project | AMD distributes these as signed DX12 providers. Do not relabel any analytical or v07 path as one of them. |
+
+The matrix is deliberately about software integration, not a hardware promise:
+hosts must check their own Vulkan feature set and their selected provider's
+published support before enabling an option.
+
 ## Build and test
 
 ```sh
