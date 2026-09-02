@@ -280,6 +280,9 @@ struct FfxVkFsr3_3_1_6FrameGenerationContext {
     uint32_t renderWidth = 0u;
     uint32_t renderHeight = 0u;
     VkFormat colorFormat = VK_FORMAT_UNDEFINED;
+    VkImage preparedColorImage = VK_NULL_HANDLE;
+    VkImage preparedDepthImage = VK_NULL_HANDLE;
+    VkImage preparedMotionVectorImage = VK_NULL_HANDLE;
     FfxApiResource color{};
     OwnedSharedImage opticalFlowVector{};
     OwnedSharedImage opticalFlowScd{};
@@ -452,6 +455,9 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
     context->frameId = info->frameId;
     context->renderWidth = info->renderWidth;
     context->renderHeight = info->renderHeight;
+    context->preparedColorImage = info->color.image;
+    context->preparedDepthImage = info->depth.image;
+    context->preparedMotionVectorImage = info->motionVectors.image;
     FfxOpticalflowDispatchDescription flow{};
     flow.commandList = reinterpret_cast<FfxCommandList>(info->commandBuffer);
     flow.color = context->color;
@@ -508,6 +514,16 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
          !valid_image(info->distortionField, VK_FORMAT_R16G16_SFLOAT, 1u, 1u, false)))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     if (info->color.image != ffxVkFsr3_3_1_5BridgeGetNativeImage(context->bridge, context->color.resource))
+        return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
+    /* FI reads the current scene, depth, and motion while it writes the
+     * generated scene. A host must supply a distinct output allocation: image
+     * metadata alone cannot make a read/write alias safe, and doing so can
+     * overwrite another temporal provider's history. */
+    if (info->output.image == context->preparedColorImage ||
+        info->output.image == context->preparedDepthImage ||
+        info->output.image == context->preparedMotionVectorImage ||
+        (info->distortionField.image != VK_NULL_HANDLE &&
+         info->output.image == info->distortionField.image))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     const FfxVkFsr3_3_1_5Resource output = import_frame_image(context->bridge, info->output, true);
     const FfxApiResource outputResource = ffxVkFsr3_3_1_5BridgeResolveResource(context->bridge, output);

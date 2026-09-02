@@ -220,6 +220,16 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     dispatch.color = prepare.color;
     dispatch.output = image_info(images[3], colorFormat, 128u, 128u,
                                  VK_IMAGE_LAYOUT_GENERAL);
+    /* The public wrapper must fail closed when a host tries to reuse its
+     * source image as a generated-frame target. This otherwise corrupts
+     * temporal input/history in the host renderer. */
+    {
+        FfxVkFsr3_3_1_6FrameGenerationDispatchInfo invalid = dispatch;
+        invalid.output.image = images[0].image;
+        if (ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &invalid) !=
+            FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
+            return false;
+    }
     if (useDistortion) {
         dispatch.distortionField = image_info(images[4], VK_FORMAT_R16G16_SFLOAT, 128u, 128u,
                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

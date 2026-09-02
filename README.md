@@ -100,6 +100,10 @@ records compute work but intentionally does not own a swapchain or pacing
 policy. `RecordDispatch` also accepts an optional sampled `R16G16_SFLOAT`
 distortion field containing `UV_after - UV_before` for lens/post-process
 distortion; leave it null for the provider's neutral internal field.
+Its generated output must be a distinct Vulkan image from the colour, depth,
+motion, and optional distortion inputs supplied for that frame. The API rejects
+aliases rather than permitting a generated dispatch to overwrite a host's
+temporal source or another effect's recurrent storage.
 
 The project also creates `ffx-vulkan::fsr4-v07-assets`, a dependency-free C host helper
 for the source-v07 INT8 asset contract. Given a fixed model or DRS preset and

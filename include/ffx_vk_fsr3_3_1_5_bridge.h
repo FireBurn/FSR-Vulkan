@@ -284,6 +284,9 @@ typedef struct FfxVkFsr3_3_1_6FrameGenerationPrepareInfo {
 typedef struct FfxVkFsr3_3_1_6FrameGenerationDispatchInfo {
     VkCommandBuffer commandBuffer;
     FfxVkFsr3_3_1_6FrameGenerationImage color;
+    /* Must be a distinct image from the color, depth, and motion inputs
+     * supplied to RecordPrepare. Frame interpolation reads those inputs while
+     * writing output; aliasing them corrupts temporal history. */
     FfxVkFsr3_3_1_6FrameGenerationImage output;
     /* Optional R16G16_SFLOAT field containing UV_after - UV_before.  Leave
      * image null when post-processing did not introduce lens/distortion
