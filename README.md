@@ -34,7 +34,8 @@ The API keeps these independently selectable pieces behind one contract:
 2. FSR 3 analytical frame interpolation, including optical flow.
 3. A Q2RTX reference presenter that schedules real and generated frames and
    composes UI after interpolation; its reusable WSI policy library is
-   available, while a complete callback API is pending.
+   available through its tested callback-based acquire and immutable
+   generated-then-real present-plan API.
 4. The source-v07 FSR4 provider using the same Vulkan resource and temporal
    input types.
 5. `ffx-vulkan::rayregeneration-contract`, a provider-neutral validator for
