@@ -6,6 +6,7 @@
 #include "ffx_vk_fsr3_3_1_5_bundle.h"
 #include "ffx_vk_fsr3_3_1_5_descriptor.h"
 #include "ffx_vk_fsr3_3_1_5_pipeline.h"
+#include "ffx_vk_vulkan_compat.h"
 
 #include <stdio.h>
 #include <stdlib.h>

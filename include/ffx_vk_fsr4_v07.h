@@ -23,7 +23,7 @@
 
 #pragma once
 
-#include <vulkan/vulkan.h>
+#include "ffx_vk_vulkan_compat.h"
 #include <stdint.h>
 #include <stddef.h>
 

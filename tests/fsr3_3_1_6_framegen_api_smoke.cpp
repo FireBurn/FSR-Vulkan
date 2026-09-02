@@ -4,6 +4,7 @@
  */
 
 #include "ffx_vk_fsr3_3_1_5_bridge.h"
+#include "ffx_vk_vulkan_compat.h"
 
 #include <cstdio>
 #include <cstring>
