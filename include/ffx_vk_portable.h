@@ -115,6 +115,17 @@ typedef struct FfxVkPortableImage {
     FfxVkPortableResourceState state;
 } FfxVkPortableImage;
 
+/* Application-owned buffer metadata for provider-neutral contracts. The
+ * contract never maps, allocates, or frees this buffer; callers retain those
+ * responsibilities and keep it alive through submitted GPU work. */
+typedef struct FfxVkPortableBuffer {
+    uint32_t structSize;
+    VkBuffer buffer;
+    VkDeviceSize size;
+    VkBufferUsageFlags usage;
+    FfxVkPortableResourceState state;
+} FfxVkPortableBuffer;
+
 /*
  * Application-owned Vulkan objects used by a portable effect context.
  *

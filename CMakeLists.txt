@@ -181,6 +181,31 @@ else()
         -Wall -Wextra -Wpedantic)
 endif()
 
+# Provider-neutral validation for the public Radiance Caching host buffers.
+# It intentionally has no neural kernels or model payloads; a signed AMD
+# provider remains a separate DX12/RDNA4 runtime.
+add_library(ffx_vulkan_radiancecache_contract STATIC
+    src/ffx_vk_radiancecache_contract.c)
+add_library(ffx-vulkan::radiancecache-contract ALIAS
+    ffx_vulkan_radiancecache_contract)
+set_property(TARGET ffx_vulkan_radiancecache_contract PROPERTY
+    EXPORT_NAME radiancecache-contract)
+target_compile_features(ffx_vulkan_radiancecache_contract PUBLIC c_std_11)
+target_include_directories(ffx_vulkan_radiancecache_contract PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+target_link_libraries(ffx_vulkan_radiancecache_contract
+    PUBLIC ffx-vulkan::portable)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(ffx_vulkan_radiancecache_contract PUBLIC m)
+endif()
+if(MSVC)
+    target_compile_options(ffx_vulkan_radiancecache_contract PRIVATE /W4)
+else()
+    target_compile_options(ffx_vulkan_radiancecache_contract PRIVATE
+        -Wall -Wextra -Wpedantic)
+endif()
+
 if(FFX_VK_PORTABLE_BUILD_FSR3_HOST)
     set(FFX_1_1_4_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/upstream/ffx-1.1.4/sdk")
     add_library(ffx_vulkan_fsr3_host_1_1_4 STATIC
@@ -536,6 +561,7 @@ set_property(TARGET ffx_vulkan_effects PROPERTY EXPORT_NAME effects)
 target_link_libraries(ffx_vulkan_effects INTERFACE
     ffx-vulkan::portable
     ffx-vulkan::rayregeneration-contract
+    ffx-vulkan::radiancecache-contract
     ffx-vulkan::fsr4-v07-assets
     ffx-vulkan::framegeneration-presenter-policy
     ffx-vulkan::temporal-lifecycle)
@@ -610,6 +636,7 @@ if(FFX_VK_PORTABLE_INSTALL)
     set(FFX_VK_PORTABLE_INSTALL_TARGETS
         ffx_vulkan_portable
         ffx_vulkan_rayregeneration_contract
+        ffx_vulkan_radiancecache_contract
         ffx_vulkan_fsr4_v07_assets
         ffx_vulkan_framegeneration_presenter_policy
         ffx_vulkan_temporal_lifecycle
@@ -679,6 +706,13 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         ffx-vulkan::rayregeneration-contract)
     add_test(NAME ffx_vk_rayregeneration_contract
         COMMAND ffx_vk_rayregeneration_contract_test)
+
+    add_executable(ffx_vk_radiancecache_contract_test
+        tests/radiancecache_contract_test.c)
+    target_link_libraries(ffx_vk_radiancecache_contract_test PRIVATE
+        ffx-vulkan::radiancecache-contract)
+    add_test(NAME ffx_vk_radiancecache_contract
+        COMMAND ffx_vk_radiancecache_contract_test)
 
     add_executable(ffx_vk_temporal_lifecycle_test
         tests/temporal_lifecycle_test.c)

@@ -42,6 +42,10 @@ The API keeps these independently selectable pieces behind one contract:
    Ray-Regeneration-style depth, motion, material, noisy-radiance, hit-distance,
    ambient/specular-occlusion, and optional dominant-light inputs. It is deliberately not a neural
    denoiser or a claim that a signed AMD RR provider is available.
+6. `ffx-vulkan::radiancecache-contract`, a provider-neutral validator for
+   public Radiance Caching inference/training buffers and its two atomic
+   counters. It does not generate path-tracer samples or implement neural
+   inference/training.
 
 The presenter will use an explicit API rather than impersonating a Vulkan
 swapchain handle.  That makes queue ownership and synchronization visible and
@@ -55,7 +59,8 @@ avoids the Windows-only behavior in AMD's old Vulkan swapchain reference.
 | FSR3 3.1.6 Optical Flow / Frame Interpolation | Runnable native Vulkan compute plus WSI policy helpers | The host owns acquire, submit, present, UI composition, and pacing; a generated frame is never a replacement for a required real frame. |
 | FSR4 v07 INT8/DOT4 | Runnable experimental Vulkan provider | Requires a complete externally supplied, same-preset v07 shader/model bundle; it is not AMD FSR 4.1.1. |
 | Ray-Regeneration-style inputs | Runnable provider-neutral validation contract | Validates inputs/outputs only; it does not denoise, own models, or imply an AMD neural provider. |
-| Official FSR 4.1.1, ML Frame Generation, Ray Regeneration | Not provided by this project | AMD distributes these as signed DX12 providers. Do not relabel any analytical or v07 path as one of them. |
+| Radiance Caching host buffers | Runnable provider-neutral validation contract | Validates host buffer/counter ownership only; it does not emit samples, run a model, or imply an AMD neural provider. |
+| Official FSR 4.1.1, ML Frame Generation, Ray Regeneration, Radiance Caching | Not provided by this project | AMD distributes these as signed DX12 providers. Do not relabel any analytical or v07 path as one of them. |
 
 The matrix is deliberately about software integration, not a hardware promise:
 hosts must check their own Vulkan feature set and their selected provider's
@@ -132,6 +137,7 @@ add_subdirectory(extern/ffx-vulkan)
 target_link_libraries(my_renderer PRIVATE
     ffx-vulkan::portable
     ffx-vulkan::rayregeneration-contract
+    ffx-vulkan::radiancecache-contract
     ffx-vulkan::fsr3-vk-framegeneration-3.1.6
     ffx-vulkan::framegeneration-presenter-policy
     ffx-vulkan::fsr4-v07-vulkan)
@@ -210,6 +216,24 @@ reconstructed from view matrices. Its convention is previous position minus
 current position. Motion-vector scale has three components: XY transforms
 motion into UV space and Z transforms the previous-minus-current signed-linear
 depth delta; all three must be nonzero.
+
+The FSR4-v07 provider also has an explicit three-frame Vulkan lifetime:
+
+### Radiance Caching host-buffer contract
+
+The radiancecache-contract target validates the public Radiance Caching host
+boundary before a provider sees it. Its create-info records maximum inference
+and training sample capacities. For each dispatch, it validates sampled
+prediction/training input buffers, writable prediction output and counter
+buffers, storage usage, declared resource states, finite optional
+hyperparameters, and the documented minimum eight-byte inference/training
+atomic-counter buffer.
+
+The contract deliberately does not prescribe a provider-private structured
+element layout, allocate buffers, emit Q2/path-tracer samples, record commands,
+or implement neural inference/training. A host must generate the five buffers
+and retain them through its own GPU completion; attach a legal provider only
+after it reports support on that platform.
 
 The FSR4-v07 provider also has an explicit three-frame Vulkan lifetime:
 call `ffxFsr4VkBeginFrame(&interface, frame_id)` before each provider dispatch,
