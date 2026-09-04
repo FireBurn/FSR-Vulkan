@@ -183,7 +183,8 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
                   const Image* images, VkFormat colorFormat, VkFormat motionFormat,
                   FfxVkFsr3_3_1_6FrameGenerationTransferFunction transferFunction,
                   float maxLuminance,
-                  uint64_t frameId, bool reset, bool initialize, bool useDistortion)
+                  uint64_t frameId, bool reset, bool initialize, bool useDistortion,
+                  bool useDefaultInterpolationRect)
 {
     if (initialize)
         initialize_images(commandBuffer, images, 5u);
@@ -212,6 +213,16 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     prepare.cameraForward[2] = -1.0f;
     prepare.frameId = frameId;
     prepare.reset = reset ? VK_TRUE : VK_FALSE;
+    /* The public FI/OF context owns display-sized shared images.  Its scene
+     * color input therefore cannot silently change extent between a resize
+     * and the caller recreating the context. */
+    {
+        FfxVkFsr3_3_1_6FrameGenerationPrepareInfo invalid = prepare;
+        invalid.color.width = 127u;
+        if (ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(context, &invalid) !=
+            FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
+            return false;
+    }
     if (ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(context, &prepare) !=
         FFX_VK_FSR3_3_1_6_FRAMEGEN_OK)
         return false;
@@ -220,12 +231,42 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     dispatch.color = prepare.color;
     dispatch.output = image_info(images[3], colorFormat, 128u, 128u,
                                  VK_IMAGE_LAYOUT_GENERAL);
+    dispatch.displayWidth = 128u;
+    dispatch.displayHeight = 128u;
+    dispatch.interpolationWidth = useDefaultInterpolationRect ? 0u : 128u;
+    dispatch.interpolationHeight = useDefaultInterpolationRect ? 0u : 128u;
+    dispatch.frameTimeMilliseconds = prepare.frameTimeMilliseconds;
+    dispatch.cameraNear = prepare.cameraNear;
+    dispatch.cameraFar = prepare.cameraFar;
+    dispatch.viewSpaceToMeters = prepare.viewSpaceToMeters;
+    dispatch.cameraVerticalFovRadians = prepare.cameraVerticalFovRadians;
+    dispatch.maxLuminance = maxLuminance;
+    dispatch.transferFunction = transferFunction;
+    dispatch.frameId = frameId;
+    dispatch.reset = reset ? VK_TRUE : VK_FALSE;
     /* The public wrapper must fail closed when a host tries to reuse its
      * source image as a generated-frame target. This otherwise corrupts
      * temporal input/history in the host renderer. */
     {
         FfxVkFsr3_3_1_6FrameGenerationDispatchInfo invalid = dispatch;
         invalid.output.image = images[0].image;
+        if (ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &invalid) !=
+            FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
+            return false;
+    }
+    /* A non-default interpolation rect must be non-empty and inside the
+     * fixed context display extent.  These checks run before the SDK records
+     * work, which prevents resize glitches from becoming bad generated frames. */
+    {
+        FfxVkFsr3_3_1_6FrameGenerationDispatchInfo invalid = dispatch;
+        invalid.interpolationX = 1u;
+        invalid.interpolationWidth = 128u;
+        if (ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &invalid) !=
+            FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
+            return false;
+        invalid = dispatch;
+        invalid.interpolationWidth = 0u;
+        invalid.interpolationHeight = 128u;
         if (ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &invalid) !=
             FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
             return false;
@@ -242,19 +283,6 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
             FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
             return false;
     }
-    dispatch.displayWidth = 128u;
-    dispatch.displayHeight = 128u;
-    dispatch.interpolationWidth = 128u;
-    dispatch.interpolationHeight = 128u;
-    dispatch.frameTimeMilliseconds = prepare.frameTimeMilliseconds;
-    dispatch.cameraNear = prepare.cameraNear;
-    dispatch.cameraFar = prepare.cameraFar;
-    dispatch.viewSpaceToMeters = prepare.viewSpaceToMeters;
-    dispatch.cameraVerticalFovRadians = prepare.cameraVerticalFovRadians;
-    dispatch.maxLuminance = maxLuminance;
-    dispatch.transferFunction = transferFunction;
-    dispatch.frameId = frameId;
-    dispatch.reset = reset ? VK_TRUE : VK_FALSE;
     return ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &dispatch) ==
            FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
 }
@@ -423,7 +451,7 @@ int main()
                     "begin reset frame") ||
             !expect(record_frame(context, commands, images, colorFormat, motionFormat,
                                  transferFunction, maxLuminance,
-                                 1u, true, true, false), "record reset frame") ||
+                                 1u, true, true, false, false), "record reset frame") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end reset frame"))
             goto cleanup;
         vkGetDeviceQueue(device, family, 0u, &queue);
@@ -435,7 +463,7 @@ int main()
             !expect(vkBeginCommandBuffer(commands, &begin) == VK_SUCCESS, "begin temporal frame") ||
             !expect(record_frame(context, commands, images, colorFormat, motionFormat,
                                  transferFunction, maxLuminance,
-                                 2u, false, false, true), "record temporal frame with distortion field") ||
+                                 2u, false, false, true, true), "record temporal frame with distortion field") ||
             !expect(vkEndCommandBuffer(commands) == VK_SUCCESS, "end temporal frame") ||
             !expect(vkQueueSubmit(queue, 1u, &submit, VK_NULL_HANDLE) == VK_SUCCESS &&
                     vkQueueWaitIdle(queue) == VK_SUCCESS, "submit temporal frame") ||

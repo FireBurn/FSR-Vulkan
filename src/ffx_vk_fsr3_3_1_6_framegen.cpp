@@ -267,6 +267,10 @@ static void initialize_shared_image_layouts(
 struct FfxVkFsr3_3_1_6FrameGenerationContext {
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
+    uint32_t maxRenderWidth = 0u;
+    uint32_t maxRenderHeight = 0u;
+    uint32_t displayWidth = 0u;
+    uint32_t displayHeight = 0u;
     FfxVkFsr3_3_1_5Bridge* bridge = nullptr;
     FfxInterface backend{};
     FfxOpticalflowContext opticalFlow{};
@@ -315,6 +319,10 @@ ffxVkFsr3_3_1_6FrameGenerationContextCreate(
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_OUT_OF_MEMORY;
     context->physicalDevice = createInfo->physicalDevice;
     context->device = createInfo->device;
+    context->maxRenderWidth = createInfo->maxRenderWidth;
+    context->maxRenderHeight = createInfo->maxRenderHeight;
+    context->displayWidth = createInfo->displayWidth;
+    context->displayHeight = createInfo->displayHeight;
     context->colorFormat = createInfo->colorFormat;
     context->bridge = ffxVkFsr3_3_1_5CreateBridgeWithPhysicalDevice(
         context->physicalDevice, context->device, nullptr);
@@ -414,12 +422,15 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
 {
     if (!context || !info || context->prepared ||
         info->commandBuffer == VK_NULL_HANDLE || info->renderWidth == 0u || info->renderHeight == 0u ||
+        info->renderWidth > context->maxRenderWidth ||
+        info->renderHeight > context->maxRenderHeight ||
         info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
         info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
         info->minLuminance < 0.0f || info->maxLuminance < info->minLuminance ||
         info->transferFunction < FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB ||
         info->transferFunction > FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ||
-        !valid_image(info->color, context->colorFormat, 1u, 1u, false) ||
+        !valid_image(info->color, context->colorFormat,
+                     context->displayWidth, context->displayHeight, false) ||
         !valid_image(info->depth, VK_FORMAT_R32_SFLOAT, info->renderWidth, info->renderHeight, false) ||
         !valid_motion_image(info->motionVectors, info->renderWidth, info->renderHeight))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
@@ -502,7 +513,8 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
 {
     if (!context || !info || !context->prepared || context->dispatched ||
         info->commandBuffer == VK_NULL_HANDLE || info->frameId != context->frameId ||
-        info->displayWidth == 0u || info->displayHeight == 0u ||
+        info->displayWidth != context->displayWidth ||
+        info->displayHeight != context->displayHeight ||
         info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
         info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
         info->minLuminance < 0.0f || info->maxLuminance < info->minLuminance ||
@@ -512,6 +524,16 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
         !valid_image(info->output, context->colorFormat, info->displayWidth, info->displayHeight, true) ||
         (info->distortionField.image != VK_NULL_HANDLE &&
          !valid_image(info->distortionField, VK_FORMAT_R16G16_SFLOAT, 1u, 1u, false)))
+        return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
+    const bool defaultInterpolationRect =
+        info->interpolationX == 0u && info->interpolationY == 0u &&
+        info->interpolationWidth == 0u && info->interpolationHeight == 0u;
+    if (!defaultInterpolationRect &&
+        (info->interpolationWidth == 0u || info->interpolationHeight == 0u ||
+         info->interpolationX >= info->displayWidth ||
+         info->interpolationY >= info->displayHeight ||
+         info->interpolationWidth > info->displayWidth - info->interpolationX ||
+         info->interpolationHeight > info->displayHeight - info->interpolationY))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
     if (info->color.image != ffxVkFsr3_3_1_5BridgeGetNativeImage(context->bridge, context->color.resource))
         return FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT;
@@ -555,7 +577,7 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
                                   static_cast<int32_t>(info->interpolationY),
                                   static_cast<int32_t>(info->interpolationWidth),
                                   static_cast<int32_t>(info->interpolationHeight)};
-    if (dispatch.interpolationRect.width == 0 || dispatch.interpolationRect.height == 0) {
+    if (defaultInterpolationRect) {
         dispatch.interpolationRect.width = static_cast<int32_t>(info->displayWidth);
         dispatch.interpolationRect.height = static_cast<int32_t>(info->displayHeight);
     }

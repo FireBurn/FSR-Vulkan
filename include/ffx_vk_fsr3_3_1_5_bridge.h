@@ -294,6 +294,8 @@ typedef struct FfxVkFsr3_3_1_6FrameGenerationDispatchInfo {
     FfxVkFsr3_3_1_6FrameGenerationImage distortionField;
     uint32_t displayWidth;
     uint32_t displayHeight;
+    /* The all-zero rectangle selects the whole fixed display extent. Any
+     * non-default rectangle must be non-empty and contained within it. */
     uint32_t interpolationX;
     uint32_t interpolationY;
     uint32_t interpolationWidth;
