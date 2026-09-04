@@ -4,6 +4,9 @@ This directory is the API and portability boundary for native Vulkan FSR
 work.  It is deliberately buildable without Q2RTX so that the resulting
 implementation can be reused by other Vulkan applications.
 
+Standalone source: <https://github.com/FireBurn/FSR-Vulkan>. The same tree is
+vendored by Q2RTX for its reference integration.
+
 Current status: the public C contract, validation layer, device capability
 probe, pinned AMD 1.1.4 host scheduler, native Vulkan FSR 3 Upscaler, and
 analytical Optical Flow/Frame Interpolation compute backends are implemented

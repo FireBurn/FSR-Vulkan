@@ -599,6 +599,20 @@ if(FFX_VK_PORTABLE_INSTALL)
         endif()
         set(FFX_VK_FSR4_INSTALL_FILES
             "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}/LICENSE-FSR4-v07.txt")
+        # These shared shaders and the aggregate manifest are selected by the
+        # asset API in addition to the per-model payloads below.
+        foreach(FFX_VK_FSR4_SHARED_FILE
+                fsr4_initializers.bin fsr4_pre_weights.bin
+                fsr4_shader_manifest.json rcas.spv spd_auto_exposure.spv)
+            if(NOT EXISTS
+               "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}/${FFX_VK_FSR4_SHARED_FILE}")
+                message(FATAL_ERROR
+                    "FSR4 v07 asset directory lacks ${FFX_VK_FSR4_SHARED_FILE}: "
+                    "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}")
+            endif()
+            list(APPEND FFX_VK_FSR4_INSTALL_FILES
+                "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}/${FFX_VK_FSR4_SHARED_FILE}")
+        endforeach()
         foreach(FFX_VK_FSR4_MODEL native quality balanced performance ultraperf drs)
             set(FFX_VK_FSR4_PREFIX
                 "${FFX_VK_PORTABLE_FSR4_V07_ASSET_DIR}/fsr4_model_v07_i8_${FFX_VK_FSR4_MODEL}")
@@ -623,9 +637,9 @@ if(FFX_VK_PORTABLE_INSTALL)
                 "${FFX_VK_FSR4_PREFIX}_shader_manifest.json"
                 ${FFX_VK_FSR4_MODEL_SPIRV})
         endforeach()
-        # Do not copy the directory wholesale: callers can keep extracted,
-        # alternate, or obsolete blobs beside a valid source-v07 bundle. The
-        # reusable package carries only the explicitly model-prefixed files.
+        # Do not copy the directory wholesale: callers can keep alternate or
+        # obsolete blobs beside a valid bundle. The package carries only the
+        # required shared and model-prefixed, manifest-checked payload.
         install(FILES ${FFX_VK_FSR4_INSTALL_FILES}
             DESTINATION "${CMAKE_INSTALL_DATADIR}/ffx-vulkan/fsr4-v07")
     endif()
