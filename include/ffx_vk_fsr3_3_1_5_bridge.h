@@ -281,6 +281,10 @@ typedef struct FfxVkFsr3_3_1_6FrameGenerationPrepareInfo {
     VkBool32 reset;
 } FfxVkFsr3_3_1_6FrameGenerationPrepareInfo;
 
+/* All floating-point fields supplied to Prepare and Dispatch must be finite.
+ * Timing, near/far, view-space scale, and vertical FOV must also be positive;
+ * luminance minimum must be non-negative and maximum must not be below it. */
+
 typedef struct FfxVkFsr3_3_1_6FrameGenerationDispatchInfo {
     VkCommandBuffer commandBuffer;
     FfxVkFsr3_3_1_6FrameGenerationImage color;

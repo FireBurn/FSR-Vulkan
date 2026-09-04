@@ -10,6 +10,7 @@
 #include "ffx_opticalflow.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -225,6 +226,26 @@ static bool valid_motion_image(const FfxVkFsr3_3_1_6FrameGenerationImage& image,
            valid_image(image, image.format, width, height, false);
 }
 
+static bool finite_value(float value)
+{
+    return std::isfinite(value);
+}
+
+static bool finite_positive_value(float value)
+{
+    return finite_value(value) && value > 0.0f;
+}
+
+static bool finite_nonnegative_value(float value)
+{
+    return finite_value(value) && value >= 0.0f;
+}
+
+static bool finite_vector3(const float value[3])
+{
+    return finite_value(value[0]) && finite_value(value[1]) && finite_value(value[2]);
+}
+
 static FfxVkFsr3_3_1_5Resource import_frame_image(
     FfxVkFsr3_3_1_5Bridge* bridge,
     const FfxVkFsr3_3_1_6FrameGenerationImage& image, bool writable)
@@ -424,9 +445,17 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
         info->commandBuffer == VK_NULL_HANDLE || info->renderWidth == 0u || info->renderHeight == 0u ||
         info->renderWidth > context->maxRenderWidth ||
         info->renderHeight > context->maxRenderHeight ||
-        info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
-        info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
-        info->minLuminance < 0.0f || info->maxLuminance < info->minLuminance ||
+        !finite_value(info->jitterOffsetX) || !finite_value(info->jitterOffsetY) ||
+        !finite_value(info->motionVectorScaleX) || !finite_value(info->motionVectorScaleY) ||
+        !finite_positive_value(info->frameTimeMilliseconds) ||
+        !finite_positive_value(info->cameraNear) ||
+        !finite_positive_value(info->cameraFar) || info->cameraFar <= info->cameraNear ||
+        !finite_positive_value(info->viewSpaceToMeters) ||
+        !finite_positive_value(info->cameraVerticalFovRadians) ||
+        !finite_nonnegative_value(info->minLuminance) ||
+        !finite_value(info->maxLuminance) || info->maxLuminance < info->minLuminance ||
+        !finite_vector3(info->cameraPosition) || !finite_vector3(info->cameraUp) ||
+        !finite_vector3(info->cameraRight) || !finite_vector3(info->cameraForward) ||
         info->transferFunction < FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB ||
         info->transferFunction > FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ||
         !valid_image(info->color, context->colorFormat,
@@ -515,9 +544,13 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(
         info->commandBuffer == VK_NULL_HANDLE || info->frameId != context->frameId ||
         info->displayWidth != context->displayWidth ||
         info->displayHeight != context->displayHeight ||
-        info->frameTimeMilliseconds <= 0.0f || info->cameraNear <= 0.0f ||
-        info->cameraFar <= info->cameraNear || info->viewSpaceToMeters <= 0.0f ||
-        info->minLuminance < 0.0f || info->maxLuminance < info->minLuminance ||
+        !finite_positive_value(info->frameTimeMilliseconds) ||
+        !finite_positive_value(info->cameraNear) ||
+        !finite_positive_value(info->cameraFar) || info->cameraFar <= info->cameraNear ||
+        !finite_positive_value(info->viewSpaceToMeters) ||
+        !finite_positive_value(info->cameraVerticalFovRadians) ||
+        !finite_nonnegative_value(info->minLuminance) ||
+        !finite_value(info->maxLuminance) || info->maxLuminance < info->minLuminance ||
         info->transferFunction < FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SRGB ||
         info->transferFunction > FFX_VK_FSR3_3_1_6_FRAMEGEN_TRANSFER_SCRGB ||
         !valid_image(info->color, context->colorFormat, info->displayWidth, info->displayHeight, false) ||

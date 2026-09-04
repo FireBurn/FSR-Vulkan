@@ -106,7 +106,12 @@ distortion; leave it null for the provider's neutral internal field.
 Its generated output must be a distinct Vulkan image from the colour, depth,
 motion, and optional distortion inputs supplied for that frame. The API rejects
 aliases rather than permitting a generated dispatch to overwrite a host's
-temporal source or another effect's recurrent storage.
+temporal source or another effect's recurrent storage. The context retains its
+create-time maximum-render and display extents: recreate it after a resize,
+because stale extents, clipped interpolation rectangles, and non-finite camera,
+motion, timing, or luminance inputs are rejected before Vulkan work is recorded.
+An all-zero interpolation rectangle is the explicit whole-display shorthand;
+any other rectangle must be non-empty and contained within that display extent.
 
 The project also creates `ffx-vulkan::fsr4-v07-assets`, a dependency-free C host helper
 for the source-v07 INT8 asset contract. Given a fixed model or DRS preset and

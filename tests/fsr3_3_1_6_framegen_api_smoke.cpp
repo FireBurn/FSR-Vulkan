@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -222,6 +223,11 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
         if (ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(context, &invalid) !=
             FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
             return false;
+        invalid = prepare;
+        invalid.cameraForward[2] = std::numeric_limits<float>::quiet_NaN();
+        if (ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(context, &invalid) !=
+            FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
+            return false;
     }
     if (ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(context, &prepare) !=
         FFX_VK_FSR3_3_1_6_FRAMEGEN_OK)
@@ -250,6 +256,11 @@ bool record_frame(FfxVkFsr3_3_1_6FrameGenerationContext* context, VkCommandBuffe
     {
         FfxVkFsr3_3_1_6FrameGenerationDispatchInfo invalid = dispatch;
         invalid.output.image = images[0].image;
+        if (ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &invalid) !=
+            FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
+            return false;
+        invalid = dispatch;
+        invalid.cameraVerticalFovRadians = std::numeric_limits<float>::infinity();
         if (ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &invalid) !=
             FFX_VK_FSR3_3_1_6_FRAMEGEN_ERROR_INVALID_ARGUMENT)
             return false;
