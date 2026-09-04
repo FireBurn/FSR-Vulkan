@@ -705,10 +705,16 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
     # and test driver are outside this reusable package's ownership.
     if(FFX_VK_PORTABLE_INSTALL AND
        CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        set(FFX_VK_INSTALLED_CONSUMER_ASSET_ARGUMENTS)
+        if(FFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS)
+            list(APPEND FFX_VK_INSTALLED_CONSUMER_ASSET_ARGUMENTS
+                -DFFX_VK_PACKAGE_EXPECT_FSR4_V07_ASSETS=ON)
+        endif()
         add_test(NAME ffx_vk_installed_full_stack_consumer
             COMMAND "${CMAKE_COMMAND}"
                 "-DFFX_VK_PACKAGE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                 "-DFFX_VK_PACKAGE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                ${FFX_VK_INSTALLED_CONSUMER_ASSET_ARGUMENTS}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installed_full_stack_consumer.cmake")
         set_tests_properties(ffx_vk_installed_full_stack_consumer PROPERTIES
             RUN_SERIAL TRUE)

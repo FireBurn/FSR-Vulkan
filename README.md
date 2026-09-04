@@ -307,6 +307,8 @@ The bundle is installed under `share/ffx-vulkan/fsr4-v07`; a consumer that uses
 `find_package(ffx-vulkan)` receives that path as
 `FFX_VK_FSR4_V07_ASSET_DIR`. The application remains responsible for passing
 the matching paths returned by `ffxFsr4V07BuildAssetSet` to the provider.
+The installed-package consumer test verifies all 288 required files when this
+opt-in mode is enabled, including the shared RCAS and SPD modules.
 
 The default source tree contains no source-v07 shader/model payload. Its
 payload-dependent SPIR-V layout test is therefore added only when
