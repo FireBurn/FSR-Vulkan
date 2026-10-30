@@ -1,8 +1,8 @@
-# ffx-vulkan Integration Guide
+# UniversalScalers-Vulkan Integration Guide
 
 A modern, vendor-neutral, portable Vulkan Super Resolution and Frame Generation framework.
 
-This guide explains how external Vulkan game engines and applications can integrate `ffx-vulkan` to support AMD FSR 3, FSR 4, Intel XeSS, and NVIDIA DLSS / AMD `d4r` across all GPU vendors without proprietary runtime locks or DirectX/Wine dependencies.
+This guide explains how external Vulkan game engines and applications can integrate `UniversalScalers-Vulkan` to support AMD FSR 3, official AMD FSR 4.1.2 (including native RDNA2/Navi2 support), Intel XeSS, and NVIDIA DLSS 4 / AMD `d4r` across all GPU vendors without proprietary runtime locks or DirectX/Wine dependencies.
 
 ---
 
@@ -62,11 +62,11 @@ target_link_libraries(MyGameEngine PRIVATE ffx-vulkan::unified-sr)
 ```cmake
 include(FetchContent)
 FetchContent_Declare(
-    ffx-vulkan
-    GIT_REPOSITORY https://github.com/FireBurn/FSR-Vulkan.git
-    GIT_TAG        master
+    UniversalScalers_Vulkan
+    GIT_REPOSITORY https://github.com/FireBurn/UniversalScalers-Vulkan.git
+    GIT_TAG        main
 )
-FetchContent_MakeAvailable(ffx-vulkan)
+FetchContent_MakeAvailable(UniversalScalers_Vulkan)
 target_link_libraries(MyGameEngine PRIVATE ffx-vulkan::unified-sr)
 ```
 

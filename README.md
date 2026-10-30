@@ -1,8 +1,36 @@
-# Universal Scalers Vulkan (`ffx-vulkan`)
+# UniversalScalers-Vulkan
 
-A modern, vendor-neutral, portable Vulkan Super Resolution and Frame Generation framework uniting **AMD FidelityFX (FSR 3 & FSR 4.1.2)**, **Intel XeSS (2.0.2 Quality U-Net)**, and **NVIDIA DLSS (DLSS 4 / d4r Model K Swin Transformer)** across all GPU architectures without proprietary runtime locks or DirectX/Wine dependencies.
+A modern, vendor-neutral, portable Vulkan Super Resolution and Frame Generation framework uniting **AMD FidelityFX (FSR 3 & official FSR 4.1.2 with native RDNA2 support)**, **Intel XeSS (2.0.2 Quality U-Net)**, and **NVIDIA DLSS (DLSS 4 / d4r Model K Swin Transformer)** across all GPU architectures without proprietary runtime locks or DirectX/Wine dependencies.
 
-Standalone repository: <https://github.com/FireBurn/FSR-Vulkan> (proposed rename: `UniversalScalers-Vulkan` / `OpenScalers-Vulkan`). The same tree is vendored by Quake II RTX for its reference integration.
+Standalone repository: <https://github.com/FireBurn/UniversalScalers-Vulkan>. The same tree is vendored by Quake II RTX for its reference integration.
+
+---
+
+## Breakthrough: Native FSR 4.1.2 on AMD RDNA2 / Navi2
+
+AMD officially distributes FSR 4.1.2 exclusively as a signed DirectX 12 DLL (`amdvkffx64_4.1.2_2.4.0.4370.dll`) and limits full neural ML support to newer architectures. **UniversalScalers-Vulkan** completely breaks this limitation:
+
+1. **Clean Extraction & Decoupling**:
+   - `tools/extract_fsr412_vk.py` decompresses FXZF-compressed SPIR-V modules directly from the official DLL.
+   - Extracts 1,154 SPIR-V modules and 18 initializer binary blobs across all presets (`native`, `quality`, `balanced`, `performance`, `drs`, `ultraperf`) and tiers (`1080`, `2160`, `4320`).
+2. **Real RDNA2 / Navi2 INT8 Execution (`i8_2`)**:
+   - Executes the official 29-pass neural graph (1 prepass + 27 neural model passes + 1 postpass) on **AMD Radeon RX 6000 series (Navi2x)**.
+   - Operates purely on standard Vulkan 1.3 + `VK_KHR_shader_integer_dot_product` with packed 4x8-bit integer dot products (`DotProductInput4x8BitPacked`) and 16-bit floats (`Float16`).
+   - Requires **no** `shaderInt8` capability and **no** `computeDerivativeGroupLinearKHR` intrinsics, enabling clean, native execution on RDNA2 without driver faults or unsupported capability assertions.
+3. **Lite Handheld / APU INT8 Profile (`lite_i8`)**:
+   - Executes an optimized 12-pass graph (1 prepass + 10 neural model passes + 1 postpass).
+   - Designed for lower thermal/power budgets (Steam Deck, ROG Ally, integrated APUs), reducing FSR scope latency to ~0.93 ms.
+4. **Vulkan 1.3 SPIR-V Vector Compliance (`VUID-vkCmdDispatch-OpImageWrite-08795`)**:
+   - The official AMD SPIR-V modules contained 3-component `OpImageWrite` texel operands writing to 4-component `R16G16B16A16_SFLOAT` images, triggering validation errors under Khronos validation layers.
+   - UniversalScalers-Vulkan normalizes these modules at extraction via `promote_image_write_texels_to_vec4()`, extracting vector components and constructing a compliant `%v4float` vector with alpha padding.
+5. **Dynamic Scheduling & Scratch Allocation**:
+   - Implemented `ffxFsr4Build412Schedule()` in `src/ffx_vk_fsr4_v07_schedule.c` dynamically configuring resource slots, barriers, uniform payloads (`CsTensorSizes`), and workgroup dimensions up to 29 passes.
+   - Dynamic activation scratch buffer sizing via `ffxFsr4GetVariantScratchSize()` (~19.9 MiB for 1080p `i8_2`, ~23.9 MiB for `lite_i8`).
+6. **Live Hardware Verification**:
+   - Live tested on an **AMD Radeon RX 6800M (RADV NAVI22, `1002:73df`)** under full `VK_LAYER_KHRONOS_validation`:
+     - `412_i8_2` Quality (29 passes): **0 validation errors**, 1.20 ms scope latency.
+     - `412_lite_i8` Quality (12 passes): **0 validation errors**, 0.93 ms scope latency.
+     - `412_i8` Quality (29 passes): **0 validation errors**, 2.10 ms scope latency.
 
 ---
 
@@ -11,7 +39,7 @@ Standalone repository: <https://github.com/FireBurn/FSR-Vulkan> (proposed rename
 The project delivers a clean, unified Vulkan compute implementation for real-time upscaling and frame generation:
 
 1. **AMD FidelityFX Super Resolution**:
-   - **FSR 4.1.2**: Native Vulkan dynamic scheduling and execution of official AMD FSR 4.1.2 models (`amdvkffx64_4.1.2_2.4.0.4370.dll`). Supports RDNA2 / Navi2 INT8 (`i8_2`, 29 passes via packed `DotProductInput4x8BitPacked` + `Float16`), Lite INT8 (`lite_i8`, 12 passes), and RDNA3 INT8 (`i8`, 29 passes). Fully compliant with Vulkan 1.3 `VUID-vkCmdDispatch-OpImageWrite-08795` (automatic texel vector promotion).
+   - **FSR 4.1.2**: Native Vulkan dynamic scheduling and execution of official AMD FSR 4.1.2 models (`amdvkffx64_4.1.2_2.4.0.4370.dll`). Supports RDNA2 / Navi2 INT8 (`i8_2`, 29 passes via packed `DotProductInput4x8BitPacked` + `Float16`), Lite INT8 (`lite_i8`, 12 passes), and RDNA3 INT8 (`i8`, 29 passes).
    - **FSR 3.1.4 / 3.1.5**: Analytical temporal super resolution via native Vulkan compute.
    - **FSR 3.1.6**: Analytical Optical Flow and Frame Interpolation with VRR-aware presentation scheduling.
    - **FSR 4 v07**: Compatibility provider for versioned source-v07 INT8 models.
@@ -75,7 +103,6 @@ ctest --test-dir build --output-on-failure
   - FSR 4.1.2 `412_i8_2` Quality (29 passes): 0 errors, 1.20 ms.
   - DLSS 4 / d4r Model K (4-stage Swin Transformer): 0 errors, 0.12 ms.
   - XeSS 2.0.2 Quality (14-pass U-Net): 0 errors, 0.82 ms.
-```
 
 The standalone build creates `ffx-vulkan::portable`,
 `ffx-vulkan::fsr3-host-1.1.4`, and the compute-only
