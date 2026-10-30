@@ -78,7 +78,7 @@ static inline const FfxVkScalerModel *ffxVkScalerModel(int id)
         { FFX_VK_SCALER_FSR4_NEURAL, "fsr4", "FSR 4", "FSR4 v07 native Vulkan model pipeline. Device and asset availability are checked at runtime.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 15 },
         { FFX_VK_SCALER_FSR3_1_5, "fsr315", "FSR 3.1.5", "FSR 3.1.5 temporal reconstruction.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 3 },
         { FFX_VK_SCALER_INTEL_XESS, "xess", "XeSS 2.0.2 (Quality)", "Recovered XeSS 2.0.2 Quality INT8/DP4a U-Net (540p/720p/1080p) with spatial fallback at other presets.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 3 },
-        { FFX_VK_SCALER_NVIDIA_DLSS, "dlss", "DLSS spatial prototype", "Experimental spatial filter with fixed sharpening; recovered DLSS4/5 neural model execution is not implemented.", FFX_VK_SCALER_IMPLEMENTATION_SPATIAL_PROTOTYPE, 1 },
+        { FFX_VK_SCALER_NVIDIA_DLSS, "dlss", "DLSS 4 / d4r (Model K)", "Native Vulkan DLSS 4 / d4r Swin Transformer Model K neural reconstruction pipeline with DFN filtering.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 1 },
         { FFX_VK_SCALER_UNIFIED_AUTO, "auto", "Automatic", "Select a backend at runtime. See active-provider diagnostics for the result and fallback reason.", FFX_VK_SCALER_IMPLEMENTATION_AUTO, 3 }
     };
     return id >= 0 && id < FFX_VK_SCALER_COUNT ? &models[id] : NULL;

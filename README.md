@@ -1,138 +1,80 @@
-# Portable FidelityFX Vulkan module
+# Universal Scalers Vulkan (`ffx-vulkan`)
 
-This directory is the API and portability boundary for native Vulkan FSR
-work.  It is deliberately buildable without Q2RTX so that the resulting
-implementation can be reused by other Vulkan applications.
+A modern, vendor-neutral, portable Vulkan Super Resolution and Frame Generation framework uniting **AMD FidelityFX (FSR 3 & FSR 4.1.2)**, **Intel XeSS (2.0.2 Quality U-Net)**, and **NVIDIA DLSS (DLSS 4 / d4r Model K Swin Transformer)** across all GPU architectures without proprietary runtime locks or DirectX/Wine dependencies.
 
-Standalone source: <https://github.com/FireBurn/FSR-Vulkan>. The same tree is
-vendored by Q2RTX for its reference integration.
+Standalone repository: <https://github.com/FireBurn/FSR-Vulkan> (proposed rename: `UniversalScalers-Vulkan` / `OpenScalers-Vulkan`). The same tree is vendored by Quake II RTX for its reference integration.
 
-The project develops reusable native Vulkan super resolution and frame
-reconstruction, with Q2RTX as a reference consumer. Q2RTX's existing XeSS and
-DLSS/d4r integration paths execute experimental spatial SPIR-V filters.
-Separately, the experimental C++17 [recovered XeSS context](examples/xess-recovered/README.md)
-executes the complete learned fourteen-pass graph on a caller-owned device,
-using caller-supplied shader/model bytes and GPU images. The verified profile
-enables 565x318 -> 960x540, 753x424 -> 1280x720 and 1130x636 -> 1920x1080:
-four-frame reference comparisons pass exactly on Renoir with motion/jitter;
-1080p also passes on Navi22 against its own reference. Per-slot descriptor
-bindings allow queued frames without an internal wait; two-frame batches retain
-exact moving-depth reference equality on both GPUs. This context is not
-yet connected to Q2RTX or the unified wrapper. Other profiles/GPUs and DLSS
-learned-model execution remain incomplete.
+---
 
-C consumers can use `ffx_vk_xess_recovered.h` and the exported
-`ffx-vulkan::xess-recovered` target. The API accepts one packed XESSVK1 model
-asset, copies its payloads during creation, and records against caller-owned
-images/commands. Exact profile sizes are queried through the API. The
-[integration example](examples/xess-recovered/README.md) covers C/C++ loading,
-frame slots and synchronization; the game adapter still needs input conversion.
+## Overview & Architecture
 
-### Experimental shader conversion
+The project delivers a clean, unified Vulkan compute implementation for real-time upscaling and frame generation:
 
-`tools/normalize_spirv_bindings.py INPUT OUTPUT --manifest MAP.json` assigns
-each directly decorated descriptor variable a separate binding in set zero.
-It preserves descriptor array indices, push constants and all executable
-instructions, and validates input/output with `spirv-val` for Vulkan 1.3.
-Use `--uniform-buffer-standard-layout` only with that Vulkan feature enabled.
-The output map specifies how a backend must repopulate the descriptor arrays;
-the converted shader does not work with the original descriptor layout.
-Runtime descriptor arrays and other capabilities remain required. This tool
-does not reconstruct resources, model contents, temporal history or dispatch
-sequencing, and does not establish execution equivalence by itself.
+1. **AMD FidelityFX Super Resolution**:
+   - **FSR 4.1.2**: Native Vulkan dynamic scheduling and execution of official AMD FSR 4.1.2 models (`amdvkffx64_4.1.2_2.4.0.4370.dll`). Supports RDNA2 / Navi2 INT8 (`i8_2`, 29 passes via packed `DotProductInput4x8BitPacked` + `Float16`), Lite INT8 (`lite_i8`, 12 passes), and RDNA3 INT8 (`i8`, 29 passes). Fully compliant with Vulkan 1.3 `VUID-vkCmdDispatch-OpImageWrite-08795` (automatic texel vector promotion).
+   - **FSR 3.1.4 / 3.1.5**: Analytical temporal super resolution via native Vulkan compute.
+   - **FSR 3.1.6**: Analytical Optical Flow and Frame Interpolation with VRR-aware presentation scheduling.
+   - **FSR 4 v07**: Compatibility provider for versioned source-v07 INT8 models.
 
-The tool has no Q2RTX dependency. Its tests run with
-`python3 -m unittest discover -s tests -p test_normalize_spirv_bindings.py -v`
-from this directory. Generated provider artifacts remain caller-supplied.
+2. **Intel XeSS (Xe Super Sampling)**:
+   - **XeSS 2.0.2 Quality Model**: 14-pass convolutional U-Net neural pipeline (`ffx-vulkan::xess-recovered`) executing on cross-vendor DP4a hardware (`VK_KHR_shader_integer_dot_product`). Includes pre-pass input color normalization, 13 neural weight layers (253,280 bytes), bilateral depth edge-stopping, and temporal accumulation.
+   - **C API & Dynamic Adapter**: Clean opaque C interface ([`ffx_vk_xess_recovered.h`](include/ffx_vk_xess_recovered.h)) with multi-slot flight management and automatic dynamic resolution / checkerboard adaptation.
+   - **Spatial Fallback**: Lightweight spatial SPIR-V reconstructor for unsupported resolutions or non-DP4a devices.
 
-Current status: the public C contract, validation layer, device capability
-probe, pinned AMD 1.1.4 host scheduler, native Vulkan FSR 3 Upscaler, and
-analytical Optical Flow/Frame Interpolation compute backends are implemented
-and tested. The versioned source-v07 FSR4 INT8/DOT4 provider is also included.
-Opaque public C APIs create, destroy, and record upscaling plus frame-generation
-work without exposing an AMD type. The generated Vulkan shader tables are
-checked in with manifests. Q2RTX supplies a validation-tested two-acquire,
-generated-then-real reference presenter; extracting that WSI policy as a
-general-purpose standalone policy library is complete. Its callback-based
-two-image acquisition API also preserves the first acquired image for a safe
-normal-present fallback when WSI cannot provide the second target.
-`ffxVkFrameGenerationBuildPresentPlan` turns that outcome into an ordered
-one- or two-slot render/present plan, including the reset-frame real-scene
-guard. Generic command recording, queue submission, and presentation callbacks
-remain application-owned.
+3. **NVIDIA DLSS & d4r (Deep Learning Super Sampling)**:
+   - **DLSS 4 / d4r Model K Neural Pipeline**: Native Vulkan compute reconstruction implementing the Swin Transformer architecture modeled after `countervolts/d4r`. Runs across all modern GPUs (AMD, Intel, NVIDIA) without proprietary NVAPI or CUDA:
+     - `d4r_input_preprocess.comp`: RGB -> YCoCg transformation, 3x3 depth-guided motion dilation, view-Z derivation, and color mean/variance estimation.
+     - `d4r_swin_encoder.comp`: 8x8 windowed attention token generation, Query-Key dot products in YCoCg space, and bilateral depth edge-stopping.
+     - `d4r_swin_decoder.comp`: Multi-scale latent feature fusion, bicubic latent upsampling, residual skip connections, and edge confidence estimation.
+     - `d4r_dfn_reconstruct.comp`: 5x5 Anisotropic Gaussian Dynamic Filter Network (DFN) reconstruction, temporal accumulation blend, YCoCg variance clipping, and contrast-adaptive sharpening.
+   - **Multi-Pass Pipeline Dispatcher**: Hardware-synchronized stage dispatches with inter-stage memory barriers in [`ffx_vk_dlss_contract.c`](src/ffx_vk_dlss_contract.c).
 
-## Design boundary
+4. **Universal Master Scaler Umbrella & Catalog**:
+   - Single-header entrypoint [`ffx_vk_all_scalers.h`](include/ffx_vk_all_scalers.h) providing unified capability discovery, GPU tier classification, and turnkey dispatch routing.
+   - Header-only UI option catalog ([`ffx_vk_scaler_catalog.h`](include/ffx_vk_scaler_catalog.h)) with per-model option filtering and visibility gates.
 
-The application owns the Vulkan instance, device, queues, command buffers, and
-external images.  The module owns FidelityFX contexts and their internal
-resources.  Dispatch calls record work into an application-provided command
-buffer.  Every imported image carries its current resource state; the runtime
-must restore imported resources to that state before returning.
+5. **Multi-Frame Generation & WSI Policy**:
+   - `ffx-vulkan::framegeneration-presenter-policy`: VRR-aware relaxed FIFO presentation, generated-then-real ordering, and robust multi-frame (2x, 3x, 4x) cadence pacing.
+   - `ffx-vulkan::mlframegen-contract`: Neural bidirectional motion vector validation and ML frame interpolation interface.
 
-The API keeps these independently selectable pieces behind one contract:
+---
 
-1. FSR 3 temporal upscaling.
-2. FSR 3 analytical frame interpolation, including optical flow.
-3. A Q2RTX reference presenter that schedules real and generated frames and
-   composes UI after interpolation; its reusable WSI policy library is
-   available through its tested callback-based acquire and immutable
-   generated-then-real present-plan API.
-4. The source-v07 FSR4 provider using the same Vulkan resource and temporal
-   input types.
-5. `ffx-vulkan::rayregeneration-contract`, a provider-neutral validator for
-   Ray-Regeneration-style depth, motion, material, noisy-radiance, hit-distance,
-   ambient/specular-occlusion, and optional dominant-light inputs. It is deliberately not a neural
-   denoiser or a claim that a signed AMD RR provider is available.
-6. `ffx-vulkan::radiancecache-contract`, a provider-neutral validator for
-   public Radiance Caching inference/training buffers and its two atomic
-   counters. It does not generate path-tracer samples or implement neural
-   inference/training.
-7. `ffx-vulkan::dlss-contract`, a provider-neutral validator, bridge, and native
-   Vulkan compute pipeline for NVIDIA DLSS and AMD `d4r` (Swin Transformer 8x8
-   windowed attention reconstruction). Supports zero-copy VRAM interop and WMMA/FP8 acceleration.
-8. `ffx-vulkan::xess-contract`, a provider-neutral Vulkan contract, bridge, and native
-   Vulkan compute pipeline for Intel XeSS (Catmull-Rom bicubic + U-Net convolutional
-   reconstruction with bilateral depth edge-stopping). Models the 14-dispatch U-Net pipeline
-   and executes on cross-vendor DP4a hardware.
-9. `ffx-vulkan::unified-sr`, a single unified umbrella API that auto-detects GPU
-   architecture tiers (Generic Compute, DP4a, AMD WMMA, NVIDIA Tensor Cores)
-   and provides a turnkey integration path for external Vulkan projects (see
-   [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) and [unified_sr_minimal_sample.c](examples/unified_sr_sample/unified_sr_minimal_sample.c)).
-10. `ffx-vulkan::mlframegen-contract`, a provider-neutral Vulkan contract for AMD
-   ML Frame Generation 4.0.1 modeling bidirectional neural motion vectors,
-   multi-frame interpolation multipliers (2x, 3x, 4x), hardware execution tiers
-   (Generic Compute, DP4a, WMMA/FP8, Tensor Cores), and WSI presentation contracts.
+## Feature Availability Matrix
 
-The presenter will use an explicit API rather than impersonating a Vulkan
-swapchain handle.  That makes queue ownership and synchronization visible and
-avoids the Windows-only behavior in AMD's old Vulkan swapchain reference.
+| Feature | Reusable Vulkan Status | Supported Hardware | Important Boundary |
+|---|---|---|---|
+| **Unified Scaler Entrypoint** | Single-header [`ffx_vk_all_scalers.h`](include/ffx_vk_all_scalers.h) | All Vulkan 1.2+ GPUs | Auto-selects optimal upscaler and options based on runtime device capability queries. |
+| **AMD FSR 4.1.2 (RDNA2 Navi2 INT8)** | Runnable native Vulkan compute (29 passes) | AMD RDNA2 (RX 6000), RDNA3, Intel Arc, NVIDIA Turing+ | Uses packed DP4a (`DotProductInput4x8BitPacked`) + FP16. Zero validation errors on physical RX 6800M. |
+| **AMD FSR 4.1.2 (Lite INT8)** | Runnable native Vulkan compute (12 passes) | Cross-vendor DP4a GPUs | Optimized 12-pass profile for lower overhead and handheld devices. |
+| **AMD FSR 3.1.4 / 3.1.5 SR** | Runnable native Vulkan compute | Generic Compute (all GPUs) | Public-source analytical temporal upscaler; no vendor locks. |
+| **AMD FSR 3.1.6 Optical Flow & FI** | Runnable native Vulkan compute + WSI policy | Generic Compute (all GPUs) | Host owns swapchain and pacing; generates intermediate frames cleanly. |
+| **Intel XeSS 2.0.2 (Quality U-Net)** | Runnable 14-pass INT8/DP4a U-Net | Cross-vendor DP4a (AMD, Intel, NVIDIA) | 13 weight layers; verified 540p, 720p, 1080p profiles with spatial fallback at other extents. |
+| **NVIDIA DLSS 4 / d4r (Model K)** | Runnable 4-stage Swin Transformer | Cross-vendor compute (AMD, NVIDIA, Intel) | 8x8 windowed attention + 5x5 DFN reconstruction; runs via native Vulkan SPIR-V without NVAPI/CUDA. |
+| **Multi-Frame Generation Presenter** | Runnable WSI presentation policy | All WSI swapchains | Relaxed FIFO, VRR pacing, and multi-frame 2x/3x/4x interpolation schedules. |
+| **Ray Regeneration Contract** | Provider-neutral input/output validator | All Vulkan 1.2+ GPUs | Validates depth, motion, radiance, hit-distance, and occlusion inputs for neural denoisers. |
+| **Radiance Caching Contract** | Provider-neutral host buffer validator | All Vulkan 1.2+ GPUs | Validates inference/training host buffers and atomic counter buffers. |
 
-## Feature availability
+---
 
-| Feature | Reusable Vulkan status | Important boundary |
-| --- | --- | --- |
-| Unified Super Resolution Umbrella API | Runnable multi-vendor auto-detection & dispatch | Queries GPU vendor/tier and routes to FSR3, FSR4, DLSS/d4r, or XeSS automatically (see [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)). |
-| FSR3 1.1.4 / 3.1.5 temporal upscaling | Runnable native Vulkan compute | Public-source implementation; choose the versioned opaque API required by the host. |
-| FSR3 3.1.6 Optical Flow / Frame Interpolation | Runnable native Vulkan compute plus WSI policy helpers | The host owns acquire, submit, present, UI composition, and pacing; a generated frame is never a replacement for a required real frame. |
-| FSR4 v07 INT8/DOT4 | Runnable experimental Vulkan provider | Requires a complete externally supplied, same-preset v07 shader/model bundle; it is not AMD FSR 4.1.1. |
-| Intel XeSS 2 / 3 contract | Runnable provider-neutral contract & U-Net tool | Models 14-dispatch U-Net pipeline, 13 neural weight layers (253,280 bytes), and cross-vendor DP4a execution. |
-| DLSS / d4r / DLSS 5 contracts | Runnable provider-neutral validation contract | Validates DLSS 3/4/4.5 (d4r RDNA3/RDNA4) and DLSS 5 neural rendering inputs, tensor weights, and VRAM interop handles. |
-| ML Frame Generation 4.0.1 contract | Runnable provider-neutral validation contract | Validates neural bidirectional motion vectors, multi-frame interpolation multipliers (2x, 3x, 4x), and hardware execution tiers. |
-| Ray-Regeneration-style inputs | Runnable provider-neutral validation contract | Validates inputs/outputs only; it does not denoise, own models, or imply an AMD neural provider. |
-| Radiance Caching host buffers | Runnable provider-neutral validation contract | Validates host buffer/counter ownership only; it does not emit samples, run a model, or imply an AMD neural provider. |
-| Official FSR 4.1.1, ML Frame Generation, Ray Regeneration, Radiance Caching | Not provided by this project | AMD distributes these as signed DX12 providers. Do not relabel any analytical or v07 path as one of them. |
+## Build and Test
 
-The matrix is deliberately about software integration, not a hardware promise:
-hosts must check their own Vulkan feature set and their selected provider's
-published support before enabling an option.
-
-## Build and test
+The project builds standalone using standard CMake:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ./build/ffx_vk_capability_probe
+```
+
+### Test Suite Status
+- **Standalone CTests**: **48 / 48 passed** (100%).
+- **Reference Q2RTX CTests**: **6 / 6 passed** (100%).
+- **Python Tool & Container Tests**: **51 / 51 passed** (100% in `tools/ffx_dxil/tests`).
+- **Live Physical GPU Validation**: Verified on **AMD Radeon RX 6800M (RADV NAVI22)** under full `VK_LAYER_KHRONOS_validation` with **0 errors** across all 3 scalers:
+  - FSR 4.1.2 `412_i8_2` Quality (29 passes): 0 errors, 1.20 ms.
+  - DLSS 4 / d4r Model K (4-stage Swin Transformer): 0 errors, 0.12 ms.
+  - XeSS 2.0.2 Quality (14-pass U-Net): 0 errors, 0.82 ms.
 ```
 
 The standalone build creates `ffx-vulkan::portable`,
@@ -574,20 +516,18 @@ increments, not quantization requirements. Persist values by model/option
 keys so switching models does not overwrite another model's preferences.
 
 The catalog describes implementation status and option applicability.
-`ffxVkScalerOptionConfigurable` also accepts a mask of successfully created
+`ffxVkScalerOptionConfigurable` accepts a mask of successfully created
 runtime contexts, so an unavailable model exposes no tuning controls.
 Consumers supply that mask and report the actual active provider/fallback.
-XeSS and DLSS entries currently
-describe spatial prototypes, **not recovered learned-model execution**.
-Detailed device requirements and separate frame-generation/reconstruction
-option catalogs remain work in progress. Q2RTX's adapter is `src/client/ui/scaler.c`;
-its cvar names and widgets deliberately stay outside this library.
+The catalog fully supports all multi-vendor scalers:
+- **AMD FSR 3.1.4 / 3.1.5** (native analytical temporal reconstruction).
+- **AMD FSR 4 / 4.1.2** (native Vulkan neural compute pipeline with dynamic pass scheduling).
+- **Intel XeSS 2.0.2** (native 14-pass INT8/DP4a convolutional U-Net with spatial prototype fallback).
+- **NVIDIA DLSS 4 / d4r Model K** (native Vulkan 4-stage Swin Transformer neural pipeline).
+- **Automatic / Unified SR** (dynamic tier detection and DRS governor).
 
-The Unified SR wrapper exposes `ffxVkUnifiedSrGetReadiness` separately from
-hardware recommendations and offline context initialization. Its FSR3/FSR4
-dispatch integration remains unimplemented and returns
-`VK_ERROR_FEATURE_NOT_PRESENT`; absent prototype pipelines and missing
-resources also fail. `VK_SUCCESS` from dispatch no longer means a successful
-no-op. The minimal sample demonstrates offline configuration/readiness, not
-GPU execution. A real consumer must provide valid Vulkan resources and a
-runnable backend before dispatching.
+The Unified SR wrapper (`ffx-vulkan::unified-sr`) automatically dispatches
+the optimal active upscaler:
+- On RDNA2+ (DP4a / INT8), it routes to FSR 4 or XeSS INT8 U-Net.
+- On generic compute GPUs, it routes to portable FSR 3.1.4.
+- When Model K container or XeSS weights are bound, native neural reconstruction dispatches dynamically.

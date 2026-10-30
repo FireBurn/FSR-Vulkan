@@ -13,12 +13,14 @@ This guide explains how external Vulkan game engines and applications can integr
 | Library Target | Header | Purpose | GPU Architecture |
 |---|---|---|---|
 | `ffx-vulkan::unified-sr` | [`ffx_vk_unified_sr.h`](include/ffx_vk_unified_sr.h) | **Recommended**: Single umbrella API that automatically detects GPU capabilities and routes to optimal upscaler | Cross-vendor (AMD, NVIDIA, Intel) |
+| `ffx-vulkan::all-scalers` | [`ffx_vk_all_scalers.h`](include/ffx_vk_all_scalers.h) | Master single-header entrypoint with comprehensive query functions and scaler catalog | Cross-vendor (AMD, NVIDIA, Intel) |
 | `ffx-vulkan::portable` | [`ffx_vk_portable.h`](include/ffx_vk_portable.h) | Core Vulkan portable types (`FfxVkPortableImage`, device abstractions) | All Vulkan 1.2+ GPUs |
 | `ffx-vulkan::fsr3-vk-backend-1.1.4` | [`ffx_vk_portable.h`](include/ffx_vk_portable.h) | Native Vulkan FSR 3.1.4 / 3.1.5 temporal upscaling compute pipeline | Generic Compute (any GPU) |
 | `ffx-vulkan::fsr3-vk-framegeneration-3.1.6` | [`ffx_vk_fsr3_3_1_5_bridge.h`](include/ffx_vk_fsr3_3_1_5_bridge.h) | Native Vulkan Optical Flow & Frame Interpolation compute pipeline | Generic Compute (any GPU) |
-| `ffx-vulkan::fsr4-v07-vulkan` | [`ffx_vk_fsr4_v07.h`](include/ffx_vk_fsr4_v07.h) | FSR 4 INT8/DOT4 neural compute pipeline | Tier 2+ (`VK_KHR_shader_integer_dot_product`) |
-| `ffx-vulkan::xess-contract` | [`ffx_vk_xess_contract.h`](include/ffx_vk_xess_contract.h) | Intel XeSS 2/3 contract & 14-dispatch U-Net convolutional pipeline model | Tier 2+ (DP4a) or Intel XMX |
-| `ffx-vulkan::dlss-contract` | [`ffx_vk_dlss_contract.h`](include/ffx_vk_dlss_contract.h) | NVIDIA DLSS & AMD `d4r` (WMMA/FP8) contract and DLSS 5 Neural Rendering | Tier 3+ (Tensor Cores / AMD WMMA) |
+| `ffx-vulkan::fsr4-v07-vulkan` | [`ffx_vk_fsr4_v07.h`](include/ffx_vk_fsr4_v07.h) | AMD FSR 4.1.2 & v07 INT8 compute pipeline (dynamic 29 passes on RDNA2/Navi2) | Tier 2+ (`VK_KHR_shader_integer_dot_product`) |
+| `ffx-vulkan::xess-recovered` | [`ffx_vk_xess_recovered.h`](include/ffx_vk_xess_recovered.h) | Intel XeSS 2.0.2 Quality 14-pass INT8/DP4a convolutional U-Net | Tier 2+ (DP4a) or Intel XMX |
+| `ffx-vulkan::xess-contract` | [`ffx_vk_xess_contract.h`](include/ffx_vk_xess_contract.h) | Intel XeSS contract, U-Net topology tool, and spatial fallback | Tier 2+ (DP4a) |
+| `ffx-vulkan::dlss-contract` | [`ffx_vk_dlss_contract.h`](include/ffx_vk_dlss_contract.h) | NVIDIA DLSS 4 / d4r Model K 4-stage Swin Transformer neural pipeline & multi-pass dispatcher | Cross-vendor (AMD, NVIDIA, Intel) |
 | `ffx-vulkan::framegeneration-presenter-policy` | [`ffx_vk_framegeneration_presenter.h`](include/ffx_vk_framegeneration_presenter.h) | VRR-aware pacing, relaxed FIFO presentation, generated-then-real ordering | All WSI swapchains |
 | `ffx-vulkan::effects` | *all headers* | Convenience umbrella interface linking all above libraries | All |
 

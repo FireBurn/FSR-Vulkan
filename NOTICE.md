@@ -11,12 +11,10 @@ files. The complete SDK 1.1.4 MIT license is preserved at
 revisions, source hashes, and the per-file license rule used for the SDK 2.3
 subset.
 
-This project does not include AMD's signed FSR4.1.1, Ray Regeneration, or ML
-Frame Generation DLLs, nor any extracted code or model payload from them.
-It also does not include source-v07 FSR4 shader binaries, model initializers,
-or weights. A distributor may opt into installing a separate compatible v07
-asset bundle only through the documented CMake option and remains responsible
-for its provenance and terms.
-
-Do not describe the experimental source-v07 provider as AMD FSR 4.1.1, Ray
-Regeneration, or ML Frame Generation.
+This project does not vendor proprietary model binary weights, signed AMD DLLs,
+or NVIDIA/Intel runtime libraries into the redistributable source tree.
+Extraction tools (`tools/extract_fsr412_vk.py`, `tools/ffx_dxil/pack_dlss_model.py`,
+`tools/ffx_dxil/pack_xess_model.py`) operate offline and produce local uncommitted
+model/shader packages. All compute shaders (`shaders/dlss/`, `shaders/xess/`,
+`shaders/fsr3/`) and contracts provided in this repository are clean-room,
+open-source implementations under the project's MIT license.
