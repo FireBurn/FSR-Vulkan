@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: MIT
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0) uniform texture2D color_input;
+layout(set=0,binding=2) uniform writeonly image2D color_output;
+#ifndef OUTPUT_ONLY
+layout(set=0,binding=1) uniform texture2D motion_input;
+layout(set=0,binding=3) uniform writeonly image2D motion_output;
+layout(set=0,binding=4) uniform texture2D depth_input;
+layout(set=0,binding=5) uniform writeonly image2D depth_output;
+#endif
+layout(push_constant) uniform Parameters {
+    uvec2 extent;
+    vec2 motion_scale;
+    float color_scale;
+} parameters;
+void main()
+{
+    uvec2 pixel=gl_GlobalInvocationID.xy;
+    if(any(greaterThanEqual(pixel,parameters.extent))) return;
+    vec4 color=texelFetch(color_input,ivec2(pixel),0);
+    color.rgb*=parameters.color_scale;
+#ifndef OUTPUT_ONLY
+    // Engine alpha can contain checkerboard/material metadata, not opacity.
+    color.a=1.0;
+    vec2 motion=texelFetch(motion_input,ivec2(pixel),0).xy*parameters.motion_scale;
+    imageStore(motion_output,ivec2(pixel),vec4(motion,0.0,0.0));
+    imageStore(depth_output,ivec2(pixel),vec4(texelFetch(depth_input,ivec2(pixel),0).x,0.0,0.0,0.0));
+#endif
+    imageStore(color_output,ivec2(pixel),color);
+}

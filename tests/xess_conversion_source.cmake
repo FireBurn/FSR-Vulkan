@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+if(NOT DEFINED FFX_VK_MODULE_DIR)
+    message(FATAL_ERROR "FFX_VK_MODULE_DIR is required")
+endif()
+file(SHA256 "${FFX_VK_MODULE_DIR}/shaders/xess/xess_input_conversion.comp" expected)
+file(READ "${FFX_VK_MODULE_DIR}/src/xess_input_conversion_spv.h" generated)
+string(REGEX MATCH "Source SHA256: ([0-9a-f]+)" match "${generated}")
+if(NOT CMAKE_MATCH_1 STREQUAL expected)
+    message(FATAL_ERROR "XeSS conversion source changed: run tools/generate_xess_input_conversion.py")
+endif()
