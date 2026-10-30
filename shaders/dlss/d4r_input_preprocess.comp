@@ -1,0 +1,106 @@
+#version 460
+/*
+ * Copyright (c) 2026 Q2RTX FSR Vulkan contributors
+ * SPDX-License-Identifier: MIT
+ *
+ * NVIDIA DLSS / AMD d4r Input Preprocessing Compute Kernel
+ * Stage 1: RGB -> YCoCg, 3x3 depth-guided motion dilation, linear view-Z, and color variance.
+ */
+
+#extension GL_EXT_samplerless_texture_functions : enable
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D s_ColorIn;
+layout(set = 0, binding = 1) uniform sampler2D s_MotionIn;
+layout(set = 0, binding = 2) uniform sampler2D s_DepthIn;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D img_PreprocessedFeatures;
+layout(set = 0, binding = 4, rg16f) uniform writeonly image2D img_DilatedMotion;
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D img_ColorVariance;
+
+layout(push_constant) uniform PushConstants {
+    uvec2 inputExtent;
+    vec2 motionVectorScale;
+    float nearZ;
+    float farZ;
+    uint flags;
+    uint pad0;
+} pc;
+
+vec3 RGBToYCoCg(vec3 rgb) {
+    float y  =  0.25 * rgb.r + 0.5 * rgb.g + 0.25 * rgb.b;
+    float co =  0.50 * rgb.r               - 0.50 * rgb.b;
+    float cg = -0.25 * rgb.r + 0.5 * rgb.g - 0.25 * rgb.b;
+    return vec3(y, co, cg);
+}
+
+float LinearizeDepth(float d, float nearVal, float farVal, bool inverted) {
+    if (inverted) {
+        return (nearVal * farVal) / mix(nearVal, farVal, clamp(d, 0.0, 1.0));
+    } else {
+        return (nearVal * farVal) / mix(farVal, nearVal, clamp(d, 0.0, 1.0));
+    }
+}
+
+void main() {
+    uvec2 coord = gl_GlobalInvocationID.xy;
+    if (coord.x >= pc.inputExtent.x || coord.y >= pc.inputExtent.y)
+        return;
+
+    ivec2 iCoord = ivec2(coord);
+    bool invertedDepth = (pc.flags & 256u) != 0u;
+
+    /* 3x3 depth-guided motion vector dilation and neighborhood stats */
+    float closestDepth = invertedDepth ? -1e9 : 1e9;
+    ivec2 closestOffset = ivec2(0);
+
+    vec3 minColorYCoCg = vec3(1e9);
+    vec3 maxColorYCoCg = vec3(-1e9);
+    vec3 m1 = vec3(0.0);
+    vec3 m2 = vec3(0.0);
+    float sampleCount = 0.0;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 tapCoord = clamp(iCoord + ivec2(dx, dy), ivec2(0), ivec2(pc.inputExtent) - 1);
+            float d = texelFetch(s_DepthIn, tapCoord, 0).r;
+            vec3 cRgb = texelFetch(s_ColorIn, tapCoord, 0).rgb;
+            vec3 cYCoCg = RGBToYCoCg(cRgb);
+
+            bool isCloser = invertedDepth ? (d > closestDepth) : (d < closestDepth);
+            if (isCloser) {
+                closestDepth = d;
+                closestOffset = ivec2(dx, dy);
+            }
+
+            minColorYCoCg = min(minColorYCoCg, cYCoCg);
+            maxColorYCoCg = max(maxColorYCoCg, cYCoCg);
+            m1 += cYCoCg;
+            m2 += cYCoCg * cYCoCg;
+            sampleCount += 1.0;
+        }
+    }
+
+    /* Dilated motion vector taken from the closest depth tap */
+    ivec2 dilatedCoord = clamp(iCoord + closestOffset, ivec2(0), ivec2(pc.inputExtent) - 1);
+    vec2 dilatedMotion = texelFetch(s_MotionIn, dilatedCoord, 0).xy;
+
+    /* Center pixel color and linear depth */
+    vec3 centerRgb = texelFetch(s_ColorIn, iCoord, 0).rgb;
+    vec3 centerYCoCg = RGBToYCoCg(centerRgb);
+    float centerDepth = texelFetch(s_DepthIn, iCoord, 0).r;
+    float linearZ = LinearizeDepth(centerDepth, pc.nearZ, pc.farZ, invertedDepth);
+
+    /* 3x3 Mean and Standard Deviation in YCoCg */
+    vec3 mu = m1 / sampleCount;
+    vec3 sigma = sqrt(max(vec3(0.0), (m2 / sampleCount) - (mu * mu)));
+
+    /* Output preprocessed feature: (Y, Co, Cg, LinearZ) */
+    imageStore(img_PreprocessedFeatures, iCoord, vec4(centerYCoCg, linearZ));
+
+    /* Output dilated motion */
+    imageStore(img_DilatedMotion, iCoord, vec4(dilatedMotion, 0.0, 0.0));
+
+    /* Output color variance: store mu.y, sigma.y, min.y, max.y */
+    imageStore(img_ColorVariance, iCoord, vec4(mu.x, sigma.x, minColorYCoCg.x, maxColorYCoCg.x));
+}

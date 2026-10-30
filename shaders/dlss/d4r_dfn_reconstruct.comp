@@ -1,0 +1,152 @@
+#version 460
+/*
+ * Copyright (c) 2026 Q2RTX FSR Vulkan contributors
+ * SPDX-License-Identifier: MIT
+ *
+ * NVIDIA DLSS / AMD d4r Dynamic Filter Network (DFN) Reconstruct & Output Compute Kernel
+ * Stage 4: 5x5 Anisotropic Gaussian DFN reconstruction, temporal history accumulation,
+ * variance-guided clipping, and contrast-adaptive sharpening.
+ */
+
+#extension GL_EXT_samplerless_texture_functions : enable
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D s_ColorIn;
+layout(set = 0, binding = 1) uniform sampler2D s_DilatedMotion;
+layout(set = 0, binding = 2) uniform sampler2D s_DecodedFeatures;
+layout(set = 0, binding = 3) uniform sampler2D s_HistoryIn;
+layout(set = 0, binding = 4) uniform sampler2D s_ColorVariance;
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D img_ColorOut;
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D img_HistoryOut;
+
+layout(push_constant) uniform PushConstants {
+    uvec2 inputExtent;
+    uvec2 outputExtent;
+    vec2 jitterOffset;
+    vec2 motionVectorScale;
+    float sharpness;
+    float preExposure;
+    uint resetHistory;
+    uint flags;
+} pc;
+
+vec3 RGBToYCoCg(vec3 rgb) {
+    float y  =  0.25 * rgb.r + 0.5 * rgb.g + 0.25 * rgb.b;
+    float co =  0.50 * rgb.r               - 0.50 * rgb.b;
+    float cg = -0.25 * rgb.r + 0.5 * rgb.g - 0.25 * rgb.b;
+    return vec3(y, co, cg);
+}
+
+vec3 YCoCgToRGB(vec3 ycocg) {
+    float y  = ycocg.x;
+    float co = ycocg.y;
+    float cg = ycocg.z;
+    return vec3(
+        y + co - cg,
+        y + cg,
+        y - co - cg
+    );
+}
+
+float Luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    uvec2 outCoord = gl_GlobalInvocationID.xy;
+    if (outCoord.x >= pc.outputExtent.x || outCoord.y >= pc.outputExtent.y)
+        return;
+
+    ivec2 iOutCoord = ivec2(outCoord);
+    vec2 outUV = (vec2(outCoord) + 0.5) / vec2(pc.outputExtent);
+    vec2 inPixel = outUV * vec2(pc.inputExtent) - 0.5 + pc.jitterOffset;
+    ivec2 baseCoord = clamp(ivec2(round(inPixel)), ivec2(0), ivec2(pc.inputExtent) - 1);
+
+    /* Fetch decoded feature and confidence at output resolution */
+    vec4 decoded = texelFetch(s_DecodedFeatures, iOutCoord, 0);
+    vec3 decodedYCoCg = decoded.xyz;
+    float confidence = clamp(decoded.w, 0.0, 1.0);
+
+    /* 5x5 Anisotropic Gaussian Dynamic Filter Network (DFN) reconstruction */
+    vec3 colorAcc = vec3(0.0);
+    float weightAcc = 0.0;
+    vec2 subPixel = fract(inPixel) - 0.5;
+
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            ivec2 tapCoord = clamp(baseCoord + ivec2(dx, dy), ivec2(0), ivec2(pc.inputExtent) - 1);
+            vec3 tapColor = texelFetch(s_ColorIn, tapCoord, 0).rgb;
+
+            vec2 offset = vec2(dx, dy) - subPixel;
+            float dist2 = dot(offset, offset);
+            float spatialWeight = exp(-dist2 * 0.8);
+
+            /* Modulation by decoded feature agreement */
+            vec3 tapYCoCg = RGBToYCoCg(tapColor);
+            float featDist = length(tapYCoCg - decodedYCoCg);
+            float featWeight = exp(-featDist * 3.0);
+
+            float totalW = spatialWeight * featWeight;
+            colorAcc += tapColor * totalW;
+            weightAcc += totalW;
+        }
+    }
+
+    vec3 reconstructedRgb = (weightAcc > 1e-5) ? (colorAcc / weightAcc) : texelFetch(s_ColorIn, baseCoord, 0).rgb;
+
+    /* Fetch dilated motion vector and variance stats from input prepass */
+    vec2 motion = texelFetch(s_DilatedMotion, baseCoord, 0).xy;
+    vec4 variance = texelFetch(s_ColorVariance, baseCoord, 0);
+    float lumaMu = variance.x;
+    float lumaSigma = variance.y;
+    float lumaMin = variance.z;
+    float lumaMax = variance.w;
+
+    /* Temporal reprojection */
+    vec2 prevUV = outUV - motion * pc.motionVectorScale;
+    bool historyValid = (pc.resetHistory == 0u) &&
+                        (prevUV.x >= 0.0 && prevUV.x <= 1.0 && prevUV.y >= 0.0 && prevUV.y <= 1.0);
+
+    vec3 finalRgb = reconstructedRgb;
+
+    if (historyValid) {
+        vec2 prevCoordF = prevUV * vec2(pc.outputExtent) - 0.5;
+        ivec2 prevCoord = clamp(ivec2(round(prevCoordF)), ivec2(0), ivec2(pc.outputExtent) - 1);
+        vec3 historyRgb = texelFetch(s_HistoryIn, prevCoord, 0).rgb;
+
+        /* Variance-guided color clipping in YCoCg space */
+        vec3 historyYCoCg = RGBToYCoCg(historyRgb);
+        float clampedLuma = clamp(historyYCoCg.x, max(0.0, lumaMu - 1.25 * lumaSigma), lumaMu + 1.25 * lumaSigma);
+        historyYCoCg.x = clampedLuma;
+        vec3 clampedHistoryRgb = max(vec3(0.0), YCoCgToRGB(historyYCoCg));
+
+        /* Temporal accumulation blend: high confidence gives higher history retention */
+        float motionLen = length(motion);
+        float velocityDamp = clamp(1.0 - motionLen * 0.02, 0.5, 1.0);
+        float alpha = mix(0.85, 0.94, confidence) * velocityDamp;
+
+        finalRgb = mix(reconstructedRgb, clampedHistoryRgb, alpha);
+    }
+
+    /* Contrast-adaptive high-frequency sharpening */
+    if (pc.sharpness > 0.0) {
+        vec3 centerColor = texelFetch(s_ColorIn, baseCoord, 0).rgb;
+        vec3 diff = finalRgb - centerColor;
+        float centerLuma = Luminance(centerColor);
+        float contrast = clamp(abs(Luminance(diff)) / (centerLuma + 0.01), 0.0, 1.0);
+        float sharpFactor = pc.sharpness * (1.0 - contrast * 0.4) * 0.35;
+        finalRgb = mix(finalRgb, 2.0 * finalRgb - centerColor, clamp(sharpFactor, 0.0, 0.5));
+    }
+
+    /* Pre-exposure adjustment */
+    if (pc.preExposure > 0.0 && pc.preExposure != 1.0) {
+        finalRgb *= pc.preExposure;
+    }
+
+    finalRgb = max(vec3(0.0), finalRgb);
+
+    /* Write final output and update history buffer */
+    imageStore(img_ColorOut, iOutCoord, vec4(finalRgb, 1.0));
+    imageStore(img_HistoryOut, iOutCoord, vec4(finalRgb, 1.0));
+}

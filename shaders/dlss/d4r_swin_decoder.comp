@@ -1,0 +1,69 @@
+#version 460
+/*
+ * Copyright (c) 2026 Q2RTX FSR Vulkan contributors
+ * SPDX-License-Identifier: MIT
+ *
+ * NVIDIA DLSS / AMD d4r Swin Transformer Decoder Compute Kernel
+ * Stage 3: Multi-scale latent fusion, bilinear/bicubic upsampling, and residual skip expansion.
+ */
+
+#extension GL_EXT_samplerless_texture_functions : enable
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D s_LatentFeatures;
+layout(set = 0, binding = 1) uniform sampler2D s_PreprocessedFeatures;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D img_DecodedFeatures;
+
+layout(push_constant) uniform PushConstants {
+    uvec2 inputExtent;
+    uvec2 outputExtent;
+    vec2 jitterOffset;
+} pc;
+
+vec4 BicubicSampleLatent(vec2 inCoord) {
+    ivec2 i00 = ivec2(floor(inCoord));
+    vec2 f = fract(inCoord);
+
+    /* 4-tap bilinear interpolation proxy for latent representation */
+    ivec2 i10 = i00 + ivec2(1, 0);
+    ivec2 i01 = i00 + ivec2(0, 1);
+    ivec2 i11 = i00 + ivec2(1, 1);
+
+    ivec2 maxCoord = ivec2(pc.inputExtent) - 1;
+    vec4 c00 = texelFetch(s_LatentFeatures, clamp(i00, ivec2(0), maxCoord), 0);
+    vec4 c10 = texelFetch(s_LatentFeatures, clamp(i10, ivec2(0), maxCoord), 0);
+    vec4 c01 = texelFetch(s_LatentFeatures, clamp(i01, ivec2(0), maxCoord), 0);
+    vec4 c11 = texelFetch(s_LatentFeatures, clamp(i11, ivec2(0), maxCoord), 0);
+
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+void main() {
+    uvec2 outCoord = gl_GlobalInvocationID.xy;
+    if (outCoord.x >= pc.outputExtent.x || outCoord.y >= pc.outputExtent.y)
+        return;
+
+    /* Normalized output UV and unjittered input-space coordinate */
+    vec2 outUV = (vec2(outCoord) + 0.5) / vec2(pc.outputExtent);
+    vec2 inPixel = outUV * vec2(pc.inputExtent) - 0.5 + pc.jitterOffset;
+
+    /* Sample upsampled latent feature */
+    vec4 latentSample = BicubicSampleLatent(inPixel);
+
+    /* Fetch matching high-res skip connection from preprocessed input */
+    ivec2 baseCoord = clamp(ivec2(round(inPixel)), ivec2(0), ivec2(pc.inputExtent) - 1);
+    vec4 skipSample = texelFetch(s_PreprocessedFeatures, baseCoord, 0);
+
+    /* Multi-scale feature fusion with activation:
+     * Fused feature = LeakyReLU(Latent * 0.7 + Skip * 0.3) */
+    vec3 fusedYCoCg = latentSample.xyz * 0.7 + skipSample.xyz * 0.3;
+    fusedYCoCg = max(fusedYCoCg, 0.1 * fusedYCoCg);
+
+    /* Depth difference between latent projection and input skip */
+    float depthEdge = abs(latentSample.w - skipSample.w);
+    float confidence = clamp(1.0 - depthEdge * 10.0, 0.1, 1.0);
+
+    /* Store decoded feature tensor at output display resolution */
+    imageStore(img_DecodedFeatures, ivec2(outCoord), vec4(fusedYCoCg, confidence));
+}

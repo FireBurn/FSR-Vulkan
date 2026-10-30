@@ -167,12 +167,27 @@ int main(void) {
     assert(spirvWordCount > 0);
     assert(spirvWords[0] == 0x07230203u); /* SPIR-V magic number */
 
+    const uint32_t *preWords = ffxVkDlssGetInputPreprocessSpirv(&spirvWordCount);
+    assert(preWords != NULL && spirvWordCount > 0 && preWords[0] == 0x07230203u);
+
+    const uint32_t *encWords = ffxVkDlssGetSwinEncoderSpirv(&spirvWordCount);
+    assert(encWords != NULL && spirvWordCount > 0 && encWords[0] == 0x07230203u);
+
+    const uint32_t *decWords = ffxVkDlssGetSwinDecoderSpirv(&spirvWordCount);
+    assert(decWords != NULL && spirvWordCount > 0 && decWords[0] == 0x07230203u);
+
+    const uint32_t *dfnWords = ffxVkDlssGetDfnReconstructSpirv(&spirvWordCount);
+    assert(dfnWords != NULL && spirvWordCount > 0 && dfnWords[0] == 0x07230203u);
+
     /* Null device or pipeline pointer fail safely */
     assert(ffxVkDlssCreatePipeline(VK_NULL_HANDLE, NULL) == FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
     FfxVkDlssPipeline dummyPipeline;
     assert(ffxVkDlssCreatePipeline(VK_NULL_HANDLE, &dummyPipeline) == FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
     ffxVkDlssDestroyPipeline(VK_NULL_HANDLE, &dummyPipeline);
     assert(ffxVkDlssExecuteDispatch(VK_NULL_HANDLE, &dummyPipeline, &dispatch_info) == FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
+    FfxVkDlssIntermediateResources dummyIntermediates;
+    memset(&dummyIntermediates, 0, sizeof(dummyIntermediates));
+    assert(ffxVkDlssExecuteMultiPassDispatch(VK_NULL_HANDLE, &dummyPipeline, &dispatch_info, &dummyIntermediates) == FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT);
 
     /* 6. Test offline pre-trained tensor weights container ingestion (DLSSMOD1 and DLSSNR1) */
     size_t dlssModelSize = 65536;

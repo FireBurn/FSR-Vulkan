@@ -5,6 +5,10 @@
 
 #include "ffx_vk_dlss_contract.h"
 #include "d4r_swin_reconstruct_spv.h"
+#include "d4r_input_preprocess_spv.h"
+#include "d4r_swin_encoder_spv.h"
+#include "d4r_swin_decoder_spv.h"
+#include "d4r_dfn_reconstruct_spv.h"
 #include <math.h>
 #include <string.h>
 
@@ -406,11 +410,145 @@ typedef struct FfxVkDlssPushConstants {
     uint32_t flags;
 } FfxVkDlssPushConstants;
 
+typedef struct FfxVkDlssPreprocessPC {
+    uint32_t inputExtent[2];
+    float motionVectorScale[2];
+    float nearZ;
+    float farZ;
+    uint32_t flags;
+    uint32_t pad0;
+} FfxVkDlssPreprocessPC;
+
+typedef struct FfxVkDlssEncoderPC {
+    uint32_t inputExtent[2];
+    uint32_t flags;
+    uint32_t pad0;
+} FfxVkDlssEncoderPC;
+
+typedef struct FfxVkDlssDecoderPC {
+    uint32_t inputExtent[2];
+    uint32_t outputExtent[2];
+    float jitterOffset[2];
+} FfxVkDlssDecoderPC;
+
 const uint32_t* ffxVkDlssGetReconstructSpirv(size_t* outWordCount)
 {
     if (outWordCount)
         *outWordCount = g_d4r_swin_reconstruct_spv_word_count;
     return g_d4r_swin_reconstruct_spv;
+}
+
+const uint32_t* ffxVkDlssGetInputPreprocessSpirv(size_t* outWordCount)
+{
+    if (outWordCount)
+        *outWordCount = g_d4r_input_preprocess_spv_word_count;
+    return g_d4r_input_preprocess_spv;
+}
+
+const uint32_t* ffxVkDlssGetSwinEncoderSpirv(size_t* outWordCount)
+{
+    if (outWordCount)
+        *outWordCount = g_d4r_swin_encoder_spv_word_count;
+    return g_d4r_swin_encoder_spv;
+}
+
+const uint32_t* ffxVkDlssGetSwinDecoderSpirv(size_t* outWordCount)
+{
+    if (outWordCount)
+        *outWordCount = g_d4r_swin_decoder_spv_word_count;
+    return g_d4r_swin_decoder_spv;
+}
+
+const uint32_t* ffxVkDlssGetDfnReconstructSpirv(size_t* outWordCount)
+{
+    if (outWordCount)
+        *outWordCount = g_d4r_dfn_reconstruct_spv_word_count;
+    return g_d4r_dfn_reconstruct_spv;
+}
+
+static VkResult create_stage_pipeline(
+    VkDevice device,
+    const uint32_t* spvCode,
+    size_t spvSize,
+    uint32_t samplerCount,
+    uint32_t storageCount,
+    uint32_t pushConstantSize,
+    VkDescriptorPool pool,
+    VkDescriptorSetLayout* outSetLayout,
+    VkPipelineLayout* outPipeLayout,
+    VkShaderModule* outModule,
+    VkPipeline* outPipeline,
+    VkDescriptorSet outSets[FFX_VK_DLSS_DESCRIPTOR_SET_COUNT])
+{
+    uint32_t totalBindings = samplerCount + storageCount;
+    VkDescriptorSetLayoutBinding bindings[16];
+    memset(bindings, 0, sizeof(bindings));
+    for (uint32_t i = 0; i < samplerCount; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    for (uint32_t i = 0; i < storageCount; ++i) {
+        bindings[samplerCount + i].binding = samplerCount + i;
+        bindings[samplerCount + i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[samplerCount + i].descriptorCount = 1;
+        bindings[samplerCount + i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo = {0};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = totalBindings;
+    layoutInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, NULL, outSetLayout) != VK_SUCCESS)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    VkPushConstantRange pushRange = {0};
+    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushRange.offset = 0;
+    pushRange.size = pushConstantSize;
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo = {0};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = outSetLayout;
+    if (pushConstantSize > 0) {
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pPushConstantRanges = &pushRange;
+    }
+    if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, NULL, outPipeLayout) != VK_SUCCESS)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    VkShaderModuleCreateInfo moduleInfo = {0};
+    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    moduleInfo.codeSize = spvSize;
+    moduleInfo.pCode = spvCode;
+    if (vkCreateShaderModule(device, &moduleInfo, NULL, outModule) != VK_SUCCESS)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    VkComputePipelineCreateInfo computeInfo = {0};
+    computeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    computeInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    computeInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    computeInfo.stage.module = *outModule;
+    computeInfo.stage.pName = "main";
+    computeInfo.layout = *outPipeLayout;
+    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &computeInfo, NULL, outPipeline) != VK_SUCCESS)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    VkDescriptorSetLayout setCopies[FFX_VK_DLSS_DESCRIPTOR_SET_COUNT];
+    for (uint32_t i = 0; i < FFX_VK_DLSS_DESCRIPTOR_SET_COUNT; ++i)
+        setCopies[i] = *outSetLayout;
+
+    VkDescriptorSetAllocateInfo allocInfo = {0};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = pool;
+    allocInfo.descriptorSetCount = FFX_VK_DLSS_DESCRIPTOR_SET_COUNT;
+    allocInfo.pSetLayouts = setCopies;
+    if (vkAllocateDescriptorSets(device, &allocInfo, outSets) != VK_SUCCESS)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    return VK_SUCCESS;
 }
 
 FfxVkPortableResult ffxVkDlssCreatePipeline(
@@ -438,79 +576,16 @@ FfxVkPortableResult ffxVkDlssCreatePipeline(
         return FFX_VK_PORTABLE_ERROR_VULKAN;
     }
 
-    /* 2. Descriptor set layout: bindings 0,1,2 = SAMPLER, binding 3 = STORAGE_IMAGE */
-    VkDescriptorSetLayoutBinding bindings[4];
-    memset(bindings, 0, sizeof(bindings));
-    for (uint32_t i = 0; i < 3; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-    bindings[3].binding = 3;
-    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo = {0};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 4;
-    layoutInfo.pBindings = bindings;
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, NULL, &outPipeline->descriptorSetLayout) != VK_SUCCESS) {
-        ffxVkDlssDestroyPipeline(device, outPipeline);
-        return FFX_VK_PORTABLE_ERROR_VULKAN;
-    }
-
-    /* 3. Pipeline layout with push constants */
-    VkPushConstantRange pushRange = {0};
-    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(FfxVkDlssPushConstants);
-
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo = {0};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &outPipeline->descriptorSetLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushRange;
-    if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, NULL, &outPipeline->pipelineLayout) != VK_SUCCESS) {
-        ffxVkDlssDestroyPipeline(device, outPipeline);
-        return FFX_VK_PORTABLE_ERROR_VULKAN;
-    }
-
-    /* 4. Shader module */
-    VkShaderModuleCreateInfo moduleInfo = {0};
-    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    moduleInfo.codeSize = g_d4r_swin_reconstruct_spv_size;
-    moduleInfo.pCode = g_d4r_swin_reconstruct_spv;
-    if (vkCreateShaderModule(device, &moduleInfo, NULL, &outPipeline->shaderModule) != VK_SUCCESS) {
-        ffxVkDlssDestroyPipeline(device, outPipeline);
-        return FFX_VK_PORTABLE_ERROR_VULKAN;
-    }
-
-    /* 5. Compute pipeline */
-    VkComputePipelineCreateInfo computeInfo = {0};
-    computeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    computeInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    computeInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    computeInfo.stage.module = outPipeline->shaderModule;
-    computeInfo.stage.pName = "main";
-    computeInfo.layout = outPipeline->pipelineLayout;
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &computeInfo, NULL, &outPipeline->pipeline) != VK_SUCCESS) {
-        ffxVkDlssDestroyPipeline(device, outPipeline);
-        return FFX_VK_PORTABLE_ERROR_VULKAN;
-    }
-
-    /* 6. Descriptor pool and descriptor sets */
+    /* 2. Unified descriptor pool sized for single-pass + 4 stages */
     VkDescriptorPoolSize poolSizes[2];
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 3 * FFX_VK_DLSS_DESCRIPTOR_SET_COUNT;
+    poolSizes[0].descriptorCount = (3 + 3 + 2 + 2 + 5) * FFX_VK_DLSS_DESCRIPTOR_SET_COUNT; /* 60 */
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[1].descriptorCount = 1 * FFX_VK_DLSS_DESCRIPTOR_SET_COUNT;
+    poolSizes[1].descriptorCount = (1 + 3 + 1 + 1 + 2) * FFX_VK_DLSS_DESCRIPTOR_SET_COUNT; /* 32 */
 
     VkDescriptorPoolCreateInfo poolInfo = {0};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = FFX_VK_DLSS_DESCRIPTOR_SET_COUNT;
+    poolInfo.maxSets = (1 + FFX_VK_DLSS_STAGE_COUNT) * FFX_VK_DLSS_DESCRIPTOR_SET_COUNT; /* 20 */
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(device, &poolInfo, NULL, &outPipeline->descriptorPool) != VK_SUCCESS) {
@@ -518,18 +593,82 @@ FfxVkPortableResult ffxVkDlssCreatePipeline(
         return FFX_VK_PORTABLE_ERROR_VULKAN;
     }
 
-    VkDescriptorSetLayout layouts[FFX_VK_DLSS_DESCRIPTOR_SET_COUNT];
-    for (uint32_t i = 0; i < FFX_VK_DLSS_DESCRIPTOR_SET_COUNT; ++i)
-        layouts[i] = outPipeline->descriptorSetLayout;
-
-    VkDescriptorSetAllocateInfo allocInfo = {0};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = outPipeline->descriptorPool;
-    allocInfo.descriptorSetCount = FFX_VK_DLSS_DESCRIPTOR_SET_COUNT;
-    allocInfo.pSetLayouts = layouts;
-    if (vkAllocateDescriptorSets(device, &allocInfo, outPipeline->descriptorSets) != VK_SUCCESS) {
+    /* 3. Single-pass reconstruction pipeline (backward-compatible and fast) */
+    if (create_stage_pipeline(
+            device,
+            g_d4r_swin_reconstruct_spv,
+            g_d4r_swin_reconstruct_spv_size,
+            3, 1,
+            sizeof(FfxVkDlssPushConstants),
+            outPipeline->descriptorPool,
+            &outPipeline->descriptorSetLayout,
+            &outPipeline->pipelineLayout,
+            &outPipeline->shaderModule,
+            &outPipeline->pipeline,
+            outPipeline->descriptorSets) != VK_SUCCESS) {
         ffxVkDlssDestroyPipeline(device, outPipeline);
         return FFX_VK_PORTABLE_ERROR_VULKAN;
+    }
+
+    /* 4. Multi-pass d4r neural compute pipeline stages */
+    /* Stage 0: Preprocess (3 samplers, 3 storage, 32 bytes PC) */
+    VkResult r0 = create_stage_pipeline(
+        device,
+        g_d4r_input_preprocess_spv,
+        g_d4r_input_preprocess_spv_size,
+        3, 3,
+        sizeof(FfxVkDlssPreprocessPC),
+        outPipeline->descriptorPool,
+        &outPipeline->stageDescriptorSetLayouts[FFX_VK_DLSS_STAGE_PREPROCESS],
+        &outPipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_PREPROCESS],
+        &outPipeline->stageShaderModules[FFX_VK_DLSS_STAGE_PREPROCESS],
+        &outPipeline->stagePipelines[FFX_VK_DLSS_STAGE_PREPROCESS],
+        outPipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_PREPROCESS]);
+
+    /* Stage 1: Swin Encoder (2 samplers, 1 storage, 16 bytes PC) */
+    VkResult r1 = create_stage_pipeline(
+        device,
+        g_d4r_swin_encoder_spv,
+        g_d4r_swin_encoder_spv_size,
+        2, 1,
+        sizeof(FfxVkDlssEncoderPC),
+        outPipeline->descriptorPool,
+        &outPipeline->stageDescriptorSetLayouts[FFX_VK_DLSS_STAGE_ENCODER],
+        &outPipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_ENCODER],
+        &outPipeline->stageShaderModules[FFX_VK_DLSS_STAGE_ENCODER],
+        &outPipeline->stagePipelines[FFX_VK_DLSS_STAGE_ENCODER],
+        outPipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_ENCODER]);
+
+    /* Stage 2: Swin Decoder (2 samplers, 1 storage, 24 bytes PC) */
+    VkResult r2 = create_stage_pipeline(
+        device,
+        g_d4r_swin_decoder_spv,
+        g_d4r_swin_decoder_spv_size,
+        2, 1,
+        sizeof(FfxVkDlssDecoderPC),
+        outPipeline->descriptorPool,
+        &outPipeline->stageDescriptorSetLayouts[FFX_VK_DLSS_STAGE_DECODER],
+        &outPipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_DECODER],
+        &outPipeline->stageShaderModules[FFX_VK_DLSS_STAGE_DECODER],
+        &outPipeline->stagePipelines[FFX_VK_DLSS_STAGE_DECODER],
+        outPipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_DECODER]);
+
+    /* Stage 3: DFN Reconstruct (5 samplers, 2 storage, 40 bytes PC) */
+    VkResult r3 = create_stage_pipeline(
+        device,
+        g_d4r_dfn_reconstruct_spv,
+        g_d4r_dfn_reconstruct_spv_size,
+        5, 2,
+        sizeof(FfxVkDlssPushConstants),
+        outPipeline->descriptorPool,
+        &outPipeline->stageDescriptorSetLayouts[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT],
+        &outPipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT],
+        &outPipeline->stageShaderModules[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT],
+        &outPipeline->stagePipelines[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT],
+        outPipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT]);
+
+    if (r0 == VK_SUCCESS && r1 == VK_SUCCESS && r2 == VK_SUCCESS && r3 == VK_SUCCESS) {
+        outPipeline->multiPassAvailable = true;
     }
 
     return FFX_VK_PORTABLE_OK;
@@ -548,10 +687,22 @@ void ffxVkDlssDestroyPipeline(
             vkDestroyShaderModule(device, pipeline->shaderModule, NULL);
         if (pipeline->pipelineLayout != VK_NULL_HANDLE)
             vkDestroyPipelineLayout(device, pipeline->pipelineLayout, NULL);
-        if (pipeline->descriptorPool != VK_NULL_HANDLE)
-            vkDestroyDescriptorPool(device, pipeline->descriptorPool, NULL);
         if (pipeline->descriptorSetLayout != VK_NULL_HANDLE)
             vkDestroyDescriptorSetLayout(device, pipeline->descriptorSetLayout, NULL);
+
+        for (uint32_t s = 0; s < FFX_VK_DLSS_STAGE_COUNT; ++s) {
+            if (pipeline->stagePipelines[s] != VK_NULL_HANDLE)
+                vkDestroyPipeline(device, pipeline->stagePipelines[s], NULL);
+            if (pipeline->stageShaderModules[s] != VK_NULL_HANDLE)
+                vkDestroyShaderModule(device, pipeline->stageShaderModules[s], NULL);
+            if (pipeline->stagePipelineLayouts[s] != VK_NULL_HANDLE)
+                vkDestroyPipelineLayout(device, pipeline->stagePipelineLayouts[s], NULL);
+            if (pipeline->stageDescriptorSetLayouts[s] != VK_NULL_HANDLE)
+                vkDestroyDescriptorSetLayout(device, pipeline->stageDescriptorSetLayouts[s], NULL);
+        }
+
+        if (pipeline->descriptorPool != VK_NULL_HANDLE)
+            vkDestroyDescriptorPool(device, pipeline->descriptorPool, NULL);
         if (pipeline->linearSampler != VK_NULL_HANDLE)
             vkDestroySampler(device, pipeline->linearSampler, NULL);
     }
@@ -660,6 +811,250 @@ FfxVkPortableResult ffxVkDlssExecuteDispatch(
     uint32_t groupCountX = (dispatchInfo->output.extent.width + 7) / 8;
     uint32_t groupCountY = (dispatchInfo->output.extent.height + 7) / 8;
     vkCmdDispatch(cmdBuf, groupCountX, groupCountY, 1);
+
+    return FFX_VK_PORTABLE_OK;
+}
+
+static void record_compute_barrier(VkCommandBuffer cmdBuf)
+{
+    VkMemoryBarrier barrier = {0};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(
+        cmdBuf,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,
+        1, &barrier,
+        0, NULL,
+        0, NULL);
+}
+
+FfxVkPortableResult ffxVkDlssExecuteMultiPassDispatch(
+    VkCommandBuffer cmdBuf,
+    FfxVkDlssPipeline* pipeline,
+    const FfxVkDlssDispatchInfo* dispatchInfo,
+    const FfxVkDlssIntermediateResources* intermediates)
+{
+    if (cmdBuf == VK_NULL_HANDLE || !pipeline || !pipeline->multiPassAvailable || !dispatchInfo || !intermediates)
+        return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
+
+    uint32_t setIndex = pipeline->currentSetIndex % FFX_VK_DLSS_DESCRIPTOR_SET_COUNT;
+    pipeline->currentSetIndex = (setIndex + 1) % FFX_VK_DLSS_DESCRIPTOR_SET_COUNT;
+
+    /* --- Stage 0: Preprocess --- */
+    {
+        VkDescriptorSet set0 = pipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_PREPROCESS][setIndex];
+        VkDescriptorImageInfo imgInfos[6];
+        imgInfos[0].sampler = pipeline->linearSampler;
+        imgInfos[0].imageView = dispatchInfo->color.view;
+        imgInfos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[1].sampler = pipeline->linearSampler;
+        imgInfos[1].imageView = dispatchInfo->motionVectors.view;
+        imgInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[2].sampler = pipeline->linearSampler;
+        imgInfos[2].imageView = dispatchInfo->depth.view;
+        imgInfos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[3].sampler = VK_NULL_HANDLE;
+        imgInfos[3].imageView = intermediates->preprocessedFeatures.view;
+        imgInfos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[4].sampler = VK_NULL_HANDLE;
+        imgInfos[4].imageView = intermediates->dilatedMotion.view;
+        imgInfos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[5].sampler = VK_NULL_HANDLE;
+        imgInfos[5].imageView = intermediates->colorVariance.view;
+        imgInfos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet writes[6];
+        memset(writes, 0, sizeof(writes));
+        for (uint32_t i = 0; i < 6; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set0;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = (i < 3) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &imgInfos[i];
+        }
+        vkUpdateDescriptorSets(pipeline->device, 6, writes, 0, NULL);
+
+        vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->stagePipelines[FFX_VK_DLSS_STAGE_PREPROCESS]);
+        vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_PREPROCESS], 0, 1, &set0, 0, NULL);
+
+        FfxVkDlssPreprocessPC pc0;
+        pc0.inputExtent[0] = dispatchInfo->renderSize.width;
+        pc0.inputExtent[1] = dispatchInfo->renderSize.height;
+        pc0.motionVectorScale[0] = dispatchInfo->motionVectorScale.x;
+        pc0.motionVectorScale[1] = dispatchInfo->motionVectorScale.y;
+        pc0.nearZ = dispatchInfo->nearZ > 0.0f ? dispatchInfo->nearZ : 0.1f;
+        pc0.farZ = dispatchInfo->farZ > pc0.nearZ ? dispatchInfo->farZ : 1000.0f;
+        pc0.flags = dispatchInfo->flags;
+        pc0.pad0 = 0;
+        vkCmdPushConstants(cmdBuf, pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_PREPROCESS],
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc0), &pc0);
+
+        uint32_t gx = (dispatchInfo->renderSize.width + 7) / 8;
+        uint32_t gy = (dispatchInfo->renderSize.height + 7) / 8;
+        vkCmdDispatch(cmdBuf, gx, gy, 1);
+    }
+
+    record_compute_barrier(cmdBuf);
+
+    /* --- Stage 1: Swin Encoder --- */
+    {
+        VkDescriptorSet set1 = pipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_ENCODER][setIndex];
+        VkDescriptorImageInfo imgInfos[3];
+        imgInfos[0].sampler = pipeline->linearSampler;
+        imgInfos[0].imageView = intermediates->preprocessedFeatures.view;
+        imgInfos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[1].sampler = pipeline->linearSampler;
+        imgInfos[1].imageView = intermediates->dilatedMotion.view;
+        imgInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[2].sampler = VK_NULL_HANDLE;
+        imgInfos[2].imageView = intermediates->latentFeatures.view;
+        imgInfos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet writes[3];
+        memset(writes, 0, sizeof(writes));
+        for (uint32_t i = 0; i < 3; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set1;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = (i < 2) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &imgInfos[i];
+        }
+        vkUpdateDescriptorSets(pipeline->device, 3, writes, 0, NULL);
+
+        vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->stagePipelines[FFX_VK_DLSS_STAGE_ENCODER]);
+        vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_ENCODER], 0, 1, &set1, 0, NULL);
+
+        FfxVkDlssEncoderPC pc1;
+        pc1.inputExtent[0] = dispatchInfo->renderSize.width;
+        pc1.inputExtent[1] = dispatchInfo->renderSize.height;
+        pc1.flags = dispatchInfo->flags;
+        pc1.pad0 = 0;
+        vkCmdPushConstants(cmdBuf, pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_ENCODER],
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc1), &pc1);
+
+        uint32_t gx = (dispatchInfo->renderSize.width + 7) / 8;
+        uint32_t gy = (dispatchInfo->renderSize.height + 7) / 8;
+        vkCmdDispatch(cmdBuf, gx, gy, 1);
+    }
+
+    record_compute_barrier(cmdBuf);
+
+    /* --- Stage 2: Swin Decoder --- */
+    {
+        VkDescriptorSet set2 = pipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_DECODER][setIndex];
+        VkDescriptorImageInfo imgInfos[3];
+        imgInfos[0].sampler = pipeline->linearSampler;
+        imgInfos[0].imageView = intermediates->latentFeatures.view;
+        imgInfos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[1].sampler = pipeline->linearSampler;
+        imgInfos[1].imageView = intermediates->preprocessedFeatures.view;
+        imgInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[2].sampler = VK_NULL_HANDLE;
+        imgInfos[2].imageView = intermediates->decodedFeatures.view;
+        imgInfos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet writes[3];
+        memset(writes, 0, sizeof(writes));
+        for (uint32_t i = 0; i < 3; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set2;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = (i < 2) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &imgInfos[i];
+        }
+        vkUpdateDescriptorSets(pipeline->device, 3, writes, 0, NULL);
+
+        vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->stagePipelines[FFX_VK_DLSS_STAGE_DECODER]);
+        vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_DECODER], 0, 1, &set2, 0, NULL);
+
+        FfxVkDlssDecoderPC pc2;
+        pc2.inputExtent[0] = dispatchInfo->renderSize.width;
+        pc2.inputExtent[1] = dispatchInfo->renderSize.height;
+        pc2.outputExtent[0] = dispatchInfo->output.extent.width;
+        pc2.outputExtent[1] = dispatchInfo->output.extent.height;
+        pc2.jitterOffset[0] = dispatchInfo->jitterOffset.x;
+        pc2.jitterOffset[1] = dispatchInfo->jitterOffset.y;
+        vkCmdPushConstants(cmdBuf, pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_DECODER],
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc2), &pc2);
+
+        uint32_t gx = (dispatchInfo->output.extent.width + 7) / 8;
+        uint32_t gy = (dispatchInfo->output.extent.height + 7) / 8;
+        vkCmdDispatch(cmdBuf, gx, gy, 1);
+    }
+
+    record_compute_barrier(cmdBuf);
+
+    /* --- Stage 3: DFN Reconstruct & Output --- */
+    {
+        VkDescriptorSet set3 = pipeline->stageDescriptorSets[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT][setIndex];
+        VkDescriptorImageInfo imgInfos[7];
+        imgInfos[0].sampler = pipeline->linearSampler;
+        imgInfos[0].imageView = dispatchInfo->color.view;
+        imgInfos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[1].sampler = pipeline->linearSampler;
+        imgInfos[1].imageView = intermediates->dilatedMotion.view;
+        imgInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[2].sampler = pipeline->linearSampler;
+        imgInfos[2].imageView = intermediates->decodedFeatures.view;
+        imgInfos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[3].sampler = pipeline->linearSampler;
+        imgInfos[3].imageView = intermediates->historyIn.view != VK_NULL_HANDLE ? intermediates->historyIn.view : dispatchInfo->color.view;
+        imgInfos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[4].sampler = pipeline->linearSampler;
+        imgInfos[4].imageView = intermediates->colorVariance.view;
+        imgInfos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[5].sampler = VK_NULL_HANDLE;
+        imgInfos[5].imageView = dispatchInfo->output.view;
+        imgInfos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfos[6].sampler = VK_NULL_HANDLE;
+        imgInfos[6].imageView = intermediates->historyOut.view;
+        imgInfos[6].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet writes[7];
+        memset(writes, 0, sizeof(writes));
+        for (uint32_t i = 0; i < 7; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set3;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = (i < 5) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &imgInfos[i];
+        }
+        vkUpdateDescriptorSets(pipeline->device, 7, writes, 0, NULL);
+
+        vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->stagePipelines[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT]);
+        vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT], 0, 1, &set3, 0, NULL);
+
+        FfxVkDlssPushConstants pc3;
+        pc3.inputExtent[0] = dispatchInfo->renderSize.width;
+        pc3.inputExtent[1] = dispatchInfo->renderSize.height;
+        pc3.outputExtent[0] = dispatchInfo->output.extent.width;
+        pc3.outputExtent[1] = dispatchInfo->output.extent.height;
+        pc3.jitterOffset[0] = dispatchInfo->jitterOffset.x;
+        pc3.jitterOffset[1] = dispatchInfo->jitterOffset.y;
+        pc3.motionVectorScale[0] = dispatchInfo->motionVectorScale.x;
+        pc3.motionVectorScale[1] = dispatchInfo->motionVectorScale.y;
+        pc3.sharpness = 0.25f;
+        pc3.preExposure = dispatchInfo->preExposure > 0.0f ? dispatchInfo->preExposure : 1.0f;
+        pc3.resetHistory = dispatchInfo->frameReset ? 1u : 0u;
+        pc3.flags = dispatchInfo->flags;
+        vkCmdPushConstants(cmdBuf, pipeline->stagePipelineLayouts[FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT],
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc3), &pc3);
+
+        uint32_t gx = (dispatchInfo->output.extent.width + 7) / 8;
+        uint32_t gy = (dispatchInfo->output.extent.height + 7) / 8;
+        vkCmdDispatch(cmdBuf, gx, gy, 1);
+    }
 
     return FFX_VK_PORTABLE_OK;
 }

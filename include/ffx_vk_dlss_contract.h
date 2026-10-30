@@ -174,6 +174,27 @@ const char* ffxVkDlssGetModelName(FfxVkDlssModel model);
 const char* ffxVkDlssGetArchName(FfxVkDlssGpuArch arch);
 
 #define FFX_VK_DLSS_DESCRIPTOR_SET_COUNT 4
+#define FFX_VK_DLSS_STAGE_COUNT 4
+
+/* Stage enum for multi-pass neural reconstruction */
+typedef enum FfxVkDlssStage {
+    FFX_VK_DLSS_STAGE_PREPROCESS = 0,
+    FFX_VK_DLSS_STAGE_ENCODER = 1,
+    FFX_VK_DLSS_STAGE_DECODER = 2,
+    FFX_VK_DLSS_STAGE_DFN_RECONSTRUCT = 3,
+    FFX_VK_DLSS_STAGE_SINGLE_PASS = 4
+} FfxVkDlssStage;
+
+/* Intermediate texture resources for 4-stage neural pipeline execution */
+typedef struct FfxVkDlssIntermediateResources {
+    FfxVkPortableImage preprocessedFeatures; /* RGBA16F (renderSize) */
+    FfxVkPortableImage dilatedMotion;        /* RG16F (renderSize) */
+    FfxVkPortableImage colorVariance;        /* RGBA16F (renderSize) */
+    FfxVkPortableImage latentFeatures;       /* RGBA16F (renderSize) */
+    FfxVkPortableImage decodedFeatures;      /* RGBA16F (displaySize) */
+    FfxVkPortableImage historyIn;            /* RGBA16F (displaySize) */
+    FfxVkPortableImage historyOut;           /* RGBA16F (displaySize) */
+} FfxVkDlssIntermediateResources;
 
 /* DLSS / d4r Native Compute Pipeline and Descriptor State */
 typedef struct FfxVkDlssPipeline {
@@ -188,10 +209,22 @@ typedef struct FfxVkDlssPipeline {
     uint32_t currentSetIndex;
     bool hasPretrainedWeights;
     size_t weightsSizeBytes;
+
+    /* Multi-pass d4r neural compute pipeline stages */
+    bool multiPassAvailable;
+    VkPipeline stagePipelines[FFX_VK_DLSS_STAGE_COUNT];
+    VkPipelineLayout stagePipelineLayouts[FFX_VK_DLSS_STAGE_COUNT];
+    VkDescriptorSetLayout stageDescriptorSetLayouts[FFX_VK_DLSS_STAGE_COUNT];
+    VkShaderModule stageShaderModules[FFX_VK_DLSS_STAGE_COUNT];
+    VkDescriptorSet stageDescriptorSets[FFX_VK_DLSS_STAGE_COUNT][FFX_VK_DLSS_DESCRIPTOR_SET_COUNT];
 } FfxVkDlssPipeline;
 
-/* Access the embedded DLSS / d4r Swin Transformer reconstruction SPIR-V binary */
+/* Access the embedded DLSS / d4r SPIR-V binaries */
 const uint32_t* ffxVkDlssGetReconstructSpirv(size_t* outWordCount);
+const uint32_t* ffxVkDlssGetInputPreprocessSpirv(size_t* outWordCount);
+const uint32_t* ffxVkDlssGetSwinEncoderSpirv(size_t* outWordCount);
+const uint32_t* ffxVkDlssGetSwinDecoderSpirv(size_t* outWordCount);
+const uint32_t* ffxVkDlssGetDfnReconstructSpirv(size_t* outWordCount);
 
 /* Create compute pipeline for DLSS / d4r Swin Transformer reconstruction pass */
 FfxVkPortableResult ffxVkDlssCreatePipeline(
@@ -209,11 +242,18 @@ FfxVkPortableResult ffxVkDlssPipelineSetModel(
     const void* modelContainerData,
     size_t modelContainerSizeBytes);
 
-/* Execute DLSS / d4r Swin Transformer reconstruction compute dispatch */
+/* Execute DLSS / d4r Swin Transformer reconstruction compute dispatch (fast single-pass) */
 FfxVkPortableResult ffxVkDlssExecuteDispatch(
     VkCommandBuffer cmdBuf,
     FfxVkDlssPipeline* pipeline,
     const FfxVkDlssDispatchInfo* dispatchInfo);
+
+/* Execute full 4-stage neural compute pipeline (preprocess, encoder, decoder, DFN reconstruct) */
+FfxVkPortableResult ffxVkDlssExecuteMultiPassDispatch(
+    VkCommandBuffer cmdBuf,
+    FfxVkDlssPipeline* pipeline,
+    const FfxVkDlssDispatchInfo* dispatchInfo,
+    const FfxVkDlssIntermediateResources* intermediates);
 
 #if defined(__cplusplus)
 }

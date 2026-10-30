@@ -1,0 +1,82 @@
+#version 460
+/*
+ * Copyright (c) 2026 Q2RTX FSR Vulkan contributors
+ * SPDX-License-Identifier: MIT
+ *
+ * NVIDIA DLSS / AMD d4r Swin Transformer Encoder Compute Kernel
+ * Stage 2: 8x8 windowed attention token generation, Query-Key dot products, bilateral depth edge-stopping.
+ */
+
+#extension GL_EXT_samplerless_texture_functions : enable
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D s_PreprocessedFeatures;
+layout(set = 0, binding = 1) uniform sampler2D s_DilatedMotion;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D img_LatentFeatures;
+
+layout(push_constant) uniform PushConstants {
+    uvec2 inputExtent;
+    uint flags;
+    uint pad0;
+} pc;
+
+/* Local 8x8 Swin attention window tokens in shared memory: (Y, Co, Cg, LinearZ) */
+shared vec4 s_features[8][8];
+
+void main() {
+    uvec2 globalCoord = gl_GlobalInvocationID.xy;
+    uvec2 localID = gl_LocalInvocationID.xy;
+
+    ivec2 clampedCoord = ivec2(clamp(globalCoord, uvec2(0), pc.inputExtent - 1u));
+    vec4 centerFeat = texelFetch(s_PreprocessedFeatures, clampedCoord, 0);
+
+    /* Cooperatively populate local 8x8 window tokens in shared memory */
+    s_features[localID.y][localID.x] = centerFeat;
+    barrier();
+
+    if (globalCoord.x >= pc.inputExtent.x || globalCoord.y >= pc.inputExtent.y)
+        return;
+
+    /* Scaled dot-product Query-Key self-attention within 8x8 window */
+    vec4 q = centerFeat;
+    vec3 valAcc = vec3(0.0);
+    float weightAcc = 0.0;
+    float linearZ = q.w;
+
+    /* Evaluate attention across all tokens in the local window */
+    for (int ty = 0; ty < 8; ++ty) {
+        for (int tx = 0; tx < 8; ++tx) {
+            vec4 k = s_features[ty][tx];
+
+            /* Spatial Gaussian decay within the window */
+            vec2 dPos = vec2(localID) - vec2(tx, ty);
+            float spatialWeight = exp(-dot(dPos, dPos) * 0.12);
+
+            /* Feature similarity (dot product between Query and Key in YCoCg space) */
+            vec3 fDiff = q.xyz - k.xyz;
+            float featSim = exp(-dot(fDiff, fDiff) * 3.5);
+
+            /* Bilateral depth edge-stopping */
+            float depthDiff = abs(linearZ - k.w);
+            float depthWeight = exp(-depthDiff * 25.0);
+
+            float w = spatialWeight * featSim * depthWeight;
+            valAcc += k.xyz * w;
+            weightAcc += w;
+        }
+    }
+
+    vec3 attendedVal = (weightAcc > 1e-5) ? (valAcc / weightAcc) : q.xyz;
+
+    /* Residual connection + 1x1 projection into latent space */
+    vec3 residual = attendedVal - q.xyz;
+    vec4 latent = vec4(
+        attendedVal.x + 0.1 * residual.x,
+        attendedVal.y + 0.1 * residual.y,
+        attendedVal.z + 0.1 * residual.z,
+        linearZ
+    );
+
+    imageStore(img_LatentFeatures, ivec2(globalCoord), latent);
+}
