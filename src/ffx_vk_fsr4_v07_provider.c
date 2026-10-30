@@ -155,7 +155,8 @@ static FfxErrorCode create_internal_resources(Fsr4Context *c)
         ffxFsr4VkGetModelInitializer(&c->iface, &initializer_size);
 
     /* These are generated-code ABI sizes, not resolution estimates. */
-    size_t scratch_size = ffxFsr4GetDot4ScratchSize(dw, dh);
+    const FfxFsr4ModelVariant variant = ffxFsr4VkGetModelVariant(&c->iface);
+    size_t scratch_size = ffxFsr4GetVariantScratchSize(variant, dw, dh);
     if (!scratch_size || scratch_size > UINT32_MAX ||
         !initializer || !initializer_size ||
         initializer_size > UINT32_MAX)
@@ -428,12 +429,36 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
     uint32_t rh = d->renderSize.height;
     uint32_t dw = d->upscaleSize.width  ? d->upscaleSize.width  : c->maxUpscaleSize.width;
     uint32_t dh = d->upscaleSize.height ? d->upscaleSize.height : c->maxUpscaleSize.height;
+    const FfxFsr4ModelVariant variant = ffxFsr4VkGetModelVariant(&c->iface);
     FfxFsr4Dot4Schedule schedule;
+    FfxFsr4412Schedule schedule412;
+    uint32_t postPassIdx = 13u;
+    uint32_t rcasPassIdx = 14u;
+    uint32_t spdPassIdx  = 15u;
+    memset(&schedule, 0, sizeof(schedule));
+    memset(&schedule412, 0, sizeof(schedule412));
     if (!rw || !rh || rw > c->maxRenderSize.width ||
         rh > c->maxRenderSize.height || dw > c->maxUpscaleSize.width ||
-        dh > c->maxUpscaleSize.height ||
-        !ffxFsr4BuildDot4Schedule(dw, dh, &schedule))
+        dh > c->maxUpscaleSize.height)
         return FFX_API_RETURN_ERROR_PARAMETER;
+    if (variant == FFX_FSR4_VARIANT_V07_INT8) {
+        if (!ffxFsr4BuildDot4Schedule(dw, dh, &schedule))
+            return FFX_API_RETURN_ERROR_PARAMETER;
+    } else {
+        if (!ffxFsr4Build412Schedule(variant, dw, dh,
+                                     c->maxUpscaleSize.width,
+                                     c->maxUpscaleSize.height,
+                                     &schedule412))
+            return FFX_API_RETURN_ERROR_PARAMETER;
+        schedule.alignedWidth  = schedule412.alignedWidth;
+        schedule.alignedHeight = schedule412.alignedHeight;
+        schedule.pre           = schedule412.pre;
+        schedule.post          = schedule412.post;
+        schedule.rcas          = schedule412.rcas;
+        postPassIdx            = schedule412.modelPassCount + 1u;
+        rcasPassIdx            = postPassIdx + 1u;
+        spdPassIdx             = postPassIdx + 2u;
+    }
 
     /* Register external resources for this frame */
     FfxResourceInternal ri_color = RI_NONE;
@@ -518,14 +543,25 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
     /* Stage the cbuffer */
     FfxConstantBuffer cbHandle = {{0}};
     FfxConstantBuffer weightsHandle = {{0}};
-    size_t weights_size = 0;
-    const void *weights = ffxFsr4VkGetPrePassWeights(&c->iface, &weights_size);
-    if (!weights || weights_size != 1024u ||
-        c->iface.fpStageConstantBufferDataFunc(&c->iface, &cb,
-            (FfxUInt32)sizeof(cb), &cbHandle) != FFX_OK ||
-        c->iface.fpStageConstantBufferDataFunc(&c->iface, (void *)weights,
-            (FfxUInt32)weights_size, &weightsHandle) != FFX_OK)
+    FfxConstantBuffer tensorSizesHandle = {{0}};
+    if (c->iface.fpStageConstantBufferDataFunc(&c->iface, &cb,
+            (FfxUInt32)sizeof(cb), &cbHandle) != FFX_OK)
         goto dispatch_error;
+    if (variant == FFX_FSR4_VARIANT_V07_INT8) {
+        size_t weights_size = 0;
+        const void *weights = ffxFsr4VkGetPrePassWeights(&c->iface, &weights_size);
+        if (!weights || weights_size != 1024u ||
+            c->iface.fpStageConstantBufferDataFunc(&c->iface, (void *)weights,
+                (FfxUInt32)weights_size, &weightsHandle) != FFX_OK)
+            goto dispatch_error;
+    } else {
+        const FfxUInt32 tensor_bytes =
+            (FfxUInt32)(schedule412.tensorCount * sizeof(schedule412.tensorSizes[0]));
+        if (!tensor_bytes ||
+            c->iface.fpStageConstantBufferDataFunc(&c->iface, schedule412.tensorSizes,
+                tensor_bytes, &tensorSizesHandle) != FFX_OK)
+            goto dispatch_error;
+    }
 
     if (d->enableAutoExposure) {
         struct {
@@ -556,7 +592,7 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
         memset(&job, 0, sizeof(job));
         job.jobType = FFX_GPU_JOB_COMPUTE;
         cj = &job.computeJobDescriptor;
-        cj->pipeline.pipeline = (FfxPipeline)(uintptr_t)16u; /* pass 15 + 1 */
+        cj->pipeline.pipeline = (FfxPipeline)(uintptr_t)(spdPassIdx + 1u);
         cj->pipeline.srvTextureCount = 1; /* t0: r_input_color */
         cj->srvTextures[0].resource = ri_color;
         cj->pipeline.uavTextureCount = 3; /* u0..u2 */
@@ -582,8 +618,8 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
             goto dispatch_error;
     }
 
-    /* ── Schedule all 14 compute passes ──────────────────────────────────── */
-    for (int pass = 0; pass <= 13; pass++) {
+    /* ── Schedule all compute passes (pre + model + post) ────────────────── */
+    for (uint32_t pass = 0; pass <= postPassIdx; pass++) {
 
         FfxGpuJobDescription job;
         memset(&job, 0, sizeof(job));
@@ -594,7 +630,7 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
         /* Backend handles encode pass+1 so PRE (pass 0) is not confused with
          * a missing/null pipeline handle. */
         cj->pipeline.pipeline =
-            (FfxPipeline)(uintptr_t)((uint32_t)pass + 1u);
+            (FfxPipeline)(uintptr_t)(pass + 1u);
 
         if (pass == 0) {
             /* ── PRE-PASS ────────────────────────────────────────────────
@@ -631,15 +667,22 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
             cj->uavBuffers[0].resource = ri_scratch;
             cj->pipeline.uavBufferBindings[0].bindingIndex = 11;  /* u11 → bind 32 */
 
-            cj->pipeline.constCount = 2;
-            cj->cbs[0] = cbHandle;
-            cj->cbs[1] = weightsHandle;
+            if (variant == FFX_FSR4_VARIANT_V07_INT8) {
+                cj->pipeline.constCount = 2;
+                cj->cbs[0] = cbHandle;
+                cj->cbs[1] = weightsHandle;
+            } else {
+                cj->pipeline.srvBufferCount = 1;
+                cj->srvBuffers[0].resource = ri_initializer; /* bind 33 */
+                cj->pipeline.constCount = 1;
+                cj->cbs[0] = cbHandle;
+            }
 
             cj->dimensions[0] = schedule.pre.x;
             cj->dimensions[1] = schedule.pre.y;
             cj->dimensions[2] = schedule.pre.z;
 
-        } else if (pass == 13) {
+        } else if (pass == postPassIdx) {
             /* ── POST-PASS ───────────────────────────────────────────────
              *   t3 = r_input_color
              *   t6 = r_input_exposure
@@ -685,26 +728,31 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
             cj->dimensions[2] = schedule.post.z;
 
         } else {
-            /* ── MODEL PASSES 1-12 ───────────────────────────────────────
-             * Compiled with -fvk-t-shift 0 -fvk-u-shift 2:
+            /* ── MODEL / BORDER-PAD PASSES ───────────────────────────────
              *   bind 0 (t0): input scratch buffer  → srvBuffers[0]
              *   bind 1 (t1): weights/initializer   → srvBuffers[1]
              *   bind 2 (u0): output scratch buffer → uavBuffers[0]
              *   bind 3 (u1): scratch/aux buffer    → uavBuffers[1]
-             *
-             * Scratch is aliased for input/output/auxiliary activations.  The
-             * initializer is a separate immutable model parameter buffer.
+             *   bind 4 (b256 in 4.1.2): CsTensorSizes → cbs[0]
              */
             cj->pipeline.srvBufferCount = 2;
             cj->pipeline.uavBufferCount = 2;
-            cj->srvBuffers[0].resource = ri_scratch;   /* bind 0: input */
+            cj->srvBuffers[0].resource = ri_scratch;     /* bind 0: input */
             cj->srvBuffers[1].resource = ri_initializer; /* bind 1: model data */
-            cj->uavBuffers[0].resource = ri_scratch;   /* bind 2: output */
-            cj->uavBuffers[1].resource = ri_scratch;   /* bind 3: scratch */
+            cj->uavBuffers[0].resource = ri_scratch;     /* bind 2: output */
+            cj->uavBuffers[1].resource = ri_scratch;     /* bind 3: scratch */
 
-            cj->dimensions[0] = schedule.model[pass - 1].x;
-            cj->dimensions[1] = schedule.model[pass - 1].y;
-            cj->dimensions[2] = schedule.model[pass - 1].z;
+            if (variant == FFX_FSR4_VARIANT_V07_INT8) {
+                cj->dimensions[0] = schedule.model[pass - 1u].x;
+                cj->dimensions[1] = schedule.model[pass - 1u].y;
+                cj->dimensions[2] = schedule.model[pass - 1u].z;
+            } else {
+                cj->pipeline.constCount = 1;
+                cj->cbs[0] = tensorSizesHandle;
+                cj->dimensions[0] = schedule412.model[pass - 1u].x;
+                cj->dimensions[1] = schedule412.model[pass - 1u].y;
+                cj->dimensions[2] = schedule412.model[pass - 1u].z;
+            }
         }
 
         if (c->iface.fpScheduleGpuJob(&c->iface, &job) != FFX_OK)
@@ -739,7 +787,7 @@ ffxReturnCode_t ffxFsr4V07Dispatch(ffxContext *ctx, const ffxDispatchDescHeader 
         memset(&job, 0, sizeof(job));
         job.jobType = FFX_GPU_JOB_COMPUTE;
         cj = &job.computeJobDescriptor;
-        cj->pipeline.pipeline = (FfxPipeline)(uintptr_t)15u; /* pass 14 + 1 */
+        cj->pipeline.pipeline = (FfxPipeline)(uintptr_t)(rcasPassIdx + 1u);
         cj->pipeline.srvTextureCount = 19; /* t0..t18 */
         cj->pipeline.uavTextureCount = 12; /* u0..u11 */
         for (uint32_t i = 0; i < cj->pipeline.srvTextureCount; ++i)

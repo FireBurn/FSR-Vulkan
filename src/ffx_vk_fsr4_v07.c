@@ -31,7 +31,7 @@
 #define MAX_RESOURCES       192
 #define MAX_PIPELINES        32
 #define MAX_PENDING_JOBS     96
-#define MAX_DESC_SETS        64   /* per pool — up to 16 FSR4/SPD/RCAS passes */
+#define MAX_DESC_SETS       128   /* per pool — up to 29 FSR4/SPD/RCAS passes */
 #define NUM_POOL_FRAMES       3   /* maximum unretired host dispatches */
 #define MAX_STAGING          32
 #define MAX_EXTERNAL_IMAGES   8   /* color, depth, motion, output + host slack */
@@ -42,10 +42,15 @@
 #define SLOT_SRV_TEX_BASE    0    // t0..t20 → SAMPLED_IMAGE
 #define SLOT_UAV_BASE       21    // u0..u12 → STORAGE_IMAGE (or STORAGE_BUFFER for u11)
 #define SLOT_SCRATCH        32    // u11+21  (STORAGE_BUFFER in pre/post, STORAGE_IMAGE in rcas)
+#define SLOT_SRV_INITIALIZER 33   // t21 → binding 33 STORAGE_BUFFER (InitializerBuffer in 4.1.2 pre)
 #define SLOT_CBUF_WEIGHTS   34    // cbPass_Weights → UNIFORM_BUFFER
 #define SLOT_SAMPLER        35    // s0+35    → SAMPLER
 #define SLOT_CBUF_MAIN      43    // b0+43   → UNIFORM_BUFFER
 #define FULL_LAYOUT_COUNT   44    // bindings 0..43
+
+// Slot offsets inside LAYOUT_MODEL
+#define MODEL_SLOT_CBUF_TENSORS 4 // b256 → binding 4 UNIFORM_BUFFER (CsTensorSizes in 4.1.2)
+#define MODEL_LAYOUT_COUNT      5 // bindings 0..4
 
 /* Minimal SPIR-V reflection used to prove that an opaque generated module
  * agrees with this provider's descriptor ABI.  Keeping this small avoids a
@@ -173,7 +178,12 @@ struct FfxFsr4VkContext {
     Staging  staging[MAX_STAGING];
     uint32_t stagingCount;
 
-    FfxFsr4VkShaderBlob blobs[FFX_FSR4_VK_PASS_COUNT];
+    FfxFsr4ModelVariant modelVariant;
+    uint32_t passCount;
+    uint32_t postPassIdx;
+    uint32_t rcasPassIdx;
+    uint32_t spdPassIdx;
+    FfxFsr4VkShaderBlob blobs[FFX_FSR4_VK_MAX_PASS_COUNT];
     void*     modelInitializer;
     size_t    modelInitializerSize;
     void*     prePassWeights;
@@ -187,15 +197,63 @@ struct FfxFsr4VkContext {
 static FfxErrorCode restoreExternalImages(FfxFsr4VkContext* c,
                                           VkCommandBuffer cmd);
 
-static VkDescriptorType expectedDescriptorType(uint32_t passIdx, uint32_t binding)
+static int getVariantPassLayout(FfxFsr4ModelVariant variant,
+                                uint32_t* outPassCount,
+                                uint32_t* outPostIdx,
+                                uint32_t* outRcasIdx,
+                                uint32_t* outSpdIdx)
 {
-    if (passIdx >= FFX_FSR4_VK_PASS_COUNT) return VK_DESCRIPTOR_TYPE_MAX_ENUM;
-    if (passIdx >= 1u && passIdx <= 12u)
-        return binding < 4u ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-                            : VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    uint32_t passCount = 0, postIdx = 0, rcasIdx = 0, spdIdx = 0;
+    switch (variant) {
+    case FFX_FSR4_VARIANT_V07_INT8:
+        passCount = FFX_FSR4_VK_PASS_COUNT;
+        postIdx   = 13u;
+        rcasIdx   = 14u;
+        spdIdx    = 15u;
+        break;
+    case FFX_FSR4_VARIANT_412_NAVI2_INT8:
+    case FFX_FSR4_VARIANT_412_RDNA3_INT8:
+        passCount = FFX_FSR4_412_VK_PASS_COUNT;
+        postIdx   = 26u;
+        rcasIdx   = 27u;
+        spdIdx    = 28u;
+        break;
+    case FFX_FSR4_VARIANT_412_LITE_INT8:
+        passCount = FFX_FSR4_412_LITE_VK_PASS_COUNT;
+        postIdx   = 9u;
+        rcasIdx   = 10u;
+        spdIdx    = 11u;
+        break;
+    default:
+        return 0;
+    }
+    if (outPassCount) *outPassCount = passCount;
+    if (outPostIdx)   *outPostIdx   = postIdx;
+    if (outRcasIdx)   *outRcasIdx   = rcasIdx;
+    if (outSpdIdx)    *outSpdIdx    = spdIdx;
+    return 1;
+}
+
+static VkDescriptorType expectedDescriptorTypeForVariant(
+    FfxFsr4ModelVariant variant, uint32_t passIdx, uint32_t binding)
+{
+    uint32_t passCount = 0, postIdx = 0, rcasIdx = 0;
+    if (!getVariantPassLayout(variant, &passCount, &postIdx, &rcasIdx, NULL))
+        return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    if (passIdx >= passCount) return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    if (passIdx >= 1u && passIdx < postIdx) {
+        if (binding < 4u)
+            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        if (binding == MODEL_SLOT_CBUF_TENSORS && variant != FFX_FSR4_VARIANT_V07_INT8)
+            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    }
     if (binding <= 20u) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     if (binding >= 21u && binding <= 33u) {
-        if (binding == SLOT_SCRATCH && passIdx != 14u)
+        if (binding == SLOT_SCRATCH && passIdx != rcasIdx)
+            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        if (binding == SLOT_SRV_INITIALIZER && passIdx == 0u &&
+            variant != FFX_FSR4_VARIANT_V07_INT8)
             return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
@@ -216,21 +274,23 @@ static const FfxFsr4VkExternalImageState* findExternalImageState(
     return NULL;
 }
 
-static VkResult reflectShaderLayout(const FfxFsr4VkShaderBlob* shader,
+static VkResult reflectShaderLayout(FfxFsr4ModelVariant variant,
+                                    const FfxFsr4VkShaderBlob* shader,
                                     uint32_t passIdx,
                                     SpirvDescriptorLayout* layout)
 {
     const uint32_t *words;
     const size_t wordCount = shader ? shader->sizeBytes / sizeof(uint32_t) : 0u;
-    uint32_t bound;
+    uint32_t bound, passCount = 0;
     uint8_t *typeKind = NULL, *typeImageSampled = NULL, *isBufferBlock = NULL;
     uint32_t *typeElement = NULL, *varType = NULL, *varStorage = NULL;
     uint32_t *binding = NULL, *descriptorSet = NULL;
     VkResult result = VK_ERROR_INVALID_SHADER_NV;
 
     if (layout) memset(layout, 0, sizeof(*layout));
-    if (!shader || !shader->spirv || !wordCount ||
-        shader->sizeBytes % sizeof(uint32_t) || passIdx >= FFX_FSR4_VK_PASS_COUNT)
+    if (!getVariantPassLayout(variant, &passCount, NULL, NULL, NULL) ||
+        !shader || !shader->spirv || !wordCount ||
+        shader->sizeBytes % sizeof(uint32_t) || passIdx >= passCount)
         return VK_ERROR_INVALID_SHADER_NV;
     words = shader->spirv;
     if (wordCount < 5u || words[0] != SPV_MAGIC_NUMBER || !(bound = words[3]) ||
@@ -354,7 +414,7 @@ static VkResult reflectShaderLayout(const FfxFsr4VkShaderBlob* shader,
             } else {
                 goto cleanup;
             }
-            if (expectedDescriptorType(passIdx, descriptorBinding) != actual)
+            if (expectedDescriptorTypeForVariant(variant, passIdx, descriptorBinding) != actual)
                 goto cleanup;
             seen[descriptorBinding] = 1u;
             if (layout) {
@@ -385,7 +445,14 @@ cleanup:
 VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
                                        uint32_t passIdx)
 {
-    return reflectShaderLayout(shader, passIdx, NULL);
+    return reflectShaderLayout(FFX_FSR4_VARIANT_V07_INT8, shader, passIdx, NULL);
+}
+
+VkResult ffxFsr4VkValidateVariantShaderLayout(FfxFsr4ModelVariant variant,
+                                              const FfxFsr4VkShaderBlob* shader,
+                                              uint32_t passIdx)
+{
+    return reflectShaderLayout(variant, shader, passIdx, NULL);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -454,8 +521,16 @@ static VkResult queryRequiredFeatures(FfxFsr4VkContext* c)
     c->computeDerivativesSupported = hasDerivatives &&
         derivatives.computeDerivativeGroupLinear;
 
-    if (!c->fp16Supported || !c->int8Supported ||
-        !c->dotProductSupported || !c->computeDerivativesSupported ||
+    const VkBool32 needInt8 =
+        (c->modelVariant == FFX_FSR4_VARIANT_V07_INT8 ||
+         c->modelVariant == FFX_FSR4_VARIANT_412_RDNA3_INT8);
+    const VkBool32 needDerivatives =
+        (c->modelVariant != FFX_FSR4_VARIANT_412_NAVI2_INT8);
+
+    if (!c->fp16Supported ||
+        (needInt8 && !c->int8Supported) ||
+        !c->dotProductSupported ||
+        (needDerivatives && !c->computeDerivativesSupported) ||
         !features2.features.shaderInt16 ||
         !features2.features.shaderStorageImageExtendedFormats ||
         !features2.features.shaderStorageImageWriteWithoutFormat)
@@ -627,17 +702,18 @@ static VkFormat toVkFmt(FfxSurfaceFormat f)
 
 static VkResult mkPipeline(FfxFsr4VkContext* c, uint32_t passIdx, VkPipe* out)
 {
-    if (!c || !out || passIdx >= FFX_FSR4_VK_PASS_COUNT)
+    if (!c || !out || passIdx >= c->passCount)
         return VK_ERROR_INITIALIZATION_FAILED;
     const FfxFsr4VkShaderBlob* blob = &c->blobs[passIdx];
     if (!blob->spirv || blob->sizeBytes < sizeof(uint32_t) ||
         (blob->sizeBytes % sizeof(uint32_t)) != 0)
         return VK_ERROR_INVALID_SHADER_NV;
 
-    PipeKind kind = (passIdx==0||passIdx==13||passIdx==14||passIdx==15)
+    PipeKind kind = (passIdx == 0u || passIdx == c->postPassIdx ||
+                     passIdx == c->rcasPassIdx || passIdx == c->spdPassIdx)
                     ? PIPE_FULL : PIPE_MODEL;
     SpirvDescriptorLayout reflected;
-    VkResult r = reflectShaderLayout(blob, passIdx, &reflected);
+    VkResult r = reflectShaderLayout(c->modelVariant, blob, passIdx, &reflected);
     if (r != VK_SUCCESS || !reflected.bindingCount)
         return r == VK_SUCCESS ? VK_ERROR_INVALID_SHADER_NV : r;
     // The SPIR-V ID order is not necessarily descriptor-binding order. Vulkan
@@ -726,10 +802,10 @@ static FfxPipeline encodePipelineHandle(uint32_t passIdx)
     return (FfxPipeline)(uintptr_t)(passIdx + 1u);
 }
 
-static int decodePipelineHandle(FfxPipeline handle, uint32_t* passIdx)
+static int decodePipelineHandle(const FfxFsr4VkContext* c, FfxPipeline handle, uint32_t* passIdx)
 {
     uintptr_t encoded = (uintptr_t)handle;
-    if (!passIdx || encoded == 0 || encoded > FFX_FSR4_VK_PASS_COUNT)
+    if (!c || !passIdx || encoded == 0 || encoded > c->passCount)
         return 0;
     *passIdx = (uint32_t)(encoded - 1u);
     return 1;
@@ -804,16 +880,16 @@ static FfxErrorCode cbCreateBackendCtx(FfxInterface* I, FfxEffect eff,
     /* Pre/model/post are the mandatory upscaling graph.  RCAS/SPD remain
      * optional until scheduled, but a missing mandatory shader must not turn
      * into a context that silently skips work. */
-    for (int i = 0; i <= 13; ++i) {
+    for (uint32_t i = 0; i <= c->postPassIdx; ++i) {
         if (!c->blobs[i].spirv || !c->blobs[i].sizeBytes)
             return FFX_ERROR_INVALID_ARGUMENT;
     }
 
-    for (int i=0; i<FFX_FSR4_VK_PASS_COUNT; i++) {
+    for (uint32_t i = 0; i < c->passCount; i++) {
         if (!c->blobs[i].spirv) continue;
         VkResult r = mkPipeline(c, i, &c->pipe[i]);
         if (r != VK_SUCCESS) {
-            for (int j = 0; j <= i; ++j)
+            for (uint32_t j = 0; j <= i; ++j)
                 destroyPipeline(c, &c->pipe[j]);
             c->jobCount = 0;
             return FFX_ERROR_BACKEND_API_ERROR;
@@ -1150,12 +1226,12 @@ static FfxErrorCode cbCreatePipeline(FfxInterface* I, FfxShaderBlob* blob,
     while (e>n && e[-1]>=L'0' && e[-1]<=L'9') e--;
     if (*e >= L'0' && *e <= L'9') passIdx = (uint32_t)wcstoul(e, NULL, 10);
     if (wcsstr(n, L"PRE")) passIdx=0;
-    else if (wcsstr(n, L"POST")) passIdx=13;
-    else if (wcsstr(n, L"RCAS")) passIdx=14;
-    else if (wcsstr(n, L"SPD")) passIdx=15;
-    else if (passIdx == UINT32_MAX && pd->passIndex < FFX_FSR4_VK_PASS_COUNT)
+    else if (wcsstr(n, L"POST")) passIdx=c->postPassIdx;
+    else if (wcsstr(n, L"RCAS")) passIdx=c->rcasPassIdx;
+    else if (wcsstr(n, L"SPD")) passIdx=c->spdPassIdx;
+    else if (passIdx == UINT32_MAX && pd->passIndex < c->passCount)
         passIdx = pd->passIndex;
-    if (passIdx >= FFX_FSR4_VK_PASS_COUNT)
+    if (passIdx >= c->passCount)
         return FFX_ERROR_INVALID_ARGUMENT;
     if (!c->blobs[passIdx].spirv || !c->pipe[passIdx].pipeline)
         return FFX_ERROR_BACKEND_API_ERROR;
@@ -1206,7 +1282,7 @@ static FfxErrorCode cbScheduleJob(FfxInterface* I, const FfxGpuJobDescription* j
     case FFX_GPU_JOB_COMPUTE: {
         const FfxComputeJobDescription* compute = &j->computeJobDescriptor;
         uint32_t passIdx;
-        if (!decodePipelineHandle(compute->pipeline.pipeline, &passIdx) ||
+        if (!decodePipelineHandle(c, compute->pipeline.pipeline, &passIdx) ||
             !c->blobs[passIdx].spirv || !c->pipe[passIdx].pipeline ||
             !compute->dimensions[0] || !compute->dimensions[1] ||
             !compute->dimensions[2])
@@ -1286,14 +1362,14 @@ static FfxErrorCode restoreExternalImages(FfxFsr4VkContext* c,
 static FfxErrorCode writeModelDs(FfxFsr4VkContext* c, const VkPipe* pipe,
     VkDescriptorSet ds, const FfxComputeJobDescription* cj)
 {
-    VkWriteDescriptorSet wr[4];
-    VkDescriptorBufferInfo bi[4];
+    VkWriteDescriptorSet wr[MODEL_LAYOUT_COUNT];
+    VkDescriptorBufferInfo bi[MODEL_LAYOUT_COUNT];
     memset(wr,0,sizeof(wr)); memset(bi,0,sizeof(bi));
     uint32_t wc=0;
-    uint8_t written[4] = {0};
+    uint8_t written[MODEL_LAYOUT_COUNT] = {0};
 
     if (!c || !pipe || !ds || !cj || cj->pipeline.srvBufferCount != 2 ||
-        cj->pipeline.uavBufferCount != 2)
+        cj->pipeline.uavBufferCount != 2 || cj->pipeline.constCount > 1)
         return FFX_ERROR_INVALID_ARGUMENT;
 
     const FfxResourceInternal resources[4] = {
@@ -1310,7 +1386,19 @@ static FfxErrorCode writeModelDs(FfxFsr4VkContext* c, const VkPipe* pipe,
             wc++;
         } else return FFX_ERROR_INVALID_ARGUMENT;
     }
-    for (uint32_t binding = 0; binding < 4; ++binding)
+    if (cj->pipeline.constCount > 0 && pipe->bindingPresent[MODEL_SLOT_CBUF_TENSORS]) {
+        uint32_t off = (uint32_t)(uintptr_t)cj->cbs[0].resource.resource;
+        VkDeviceSize range = cj->cbs[0].resource.description.size;
+        if (!range || off > CBUF_RING_BYTES || range > CBUF_RING_BYTES - off)
+            return FFX_ERROR_INVALID_SIZE;
+        bi[wc] = (VkDescriptorBufferInfo){c->cbRing, off, range};
+        wr[wc] = (VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            NULL, ds, MODEL_SLOT_CBUF_TENSORS, 0, 1,
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, NULL, &bi[wc], NULL};
+        written[MODEL_SLOT_CBUF_TENSORS] = 1u;
+        wc++;
+    }
+    for (uint32_t binding = 0; binding < MODEL_LAYOUT_COUNT; ++binding)
         if (pipe->bindingPresent[binding] && !written[binding])
             return FFX_ERROR_INVALID_ARGUMENT;
     if (!wc) return FFX_ERROR_INVALID_ARGUMENT;
@@ -1333,7 +1421,7 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, const VkPipe* pipe, VkDescr
     if (!c || !pipe || !ds || !cj || cj->pipeline.srvTextureCount > 21 ||
         cj->pipeline.uavTextureCount > 13 ||
         cj->pipeline.uavBufferCount > 1 ||
-        cj->pipeline.srvBufferCount != 0 ||
+        cj->pipeline.srvBufferCount > 1 ||
         cj->pipeline.constCount > 2)
         return FFX_ERROR_OUT_OF_RANGE;
 
@@ -1393,6 +1481,18 @@ static FfxErrorCode writeFullDs(FfxFsr4VkContext* c, const VkPipe* pipe, VkDescr
             NULL,ds,binding,0,1,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,NULL,&bufs[bc],NULL};
         written[binding] = 1u; bc++; wc++;
+    }
+
+    // ── SRV buffer (InitializerBuffer in FSR 4.1.2 prepass) → binding 33 (STORAGE_BUFFER) ──
+    if (cj->pipeline.srvBufferCount == 1 && pipe->bindingPresent[SLOT_SRV_INITIALIZER]) {
+        uint32_t idx = cj->srvBuffers[0].resource.internalIndex;
+        if (idx >= c->resCount || c->res[idx].kind != RES_BUFFER || !c->res[idx].buf)
+            return FFX_ERROR_INVALID_ARGUMENT;
+        bufs[bc] = (VkDescriptorBufferInfo){c->res[idx].buf, 0, VK_WHOLE_SIZE};
+        wr[wc] = (VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            NULL, ds, SLOT_SRV_INITIALIZER, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, NULL, &bufs[bc], NULL};
+        written[SLOT_SRV_INITIALIZER] = 1u; bc++; wc++;
     }
 
     // ── Main constants (b0) → binding 43 (UNIFORM_BUFFER) ──
@@ -1554,7 +1654,7 @@ static FfxErrorCode cbExecuteJobs(FfxInterface* I, FfxCommandList cl, FfxUInt32 
         else if (job->jobType==FFX_GPU_JOB_COMPUTE) {
             FfxComputeJobDescription* cj=&job->computeJobDescriptor;
             uint32_t passIdx;
-            if (!decodePipelineHandle(cj->pipeline.pipeline, &passIdx))
+            if (!decodePipelineHandle(c, cj->pipeline.pipeline, &passIdx))
                 EXECUTE_FAIL(FFX_ERROR_INVALID_ARGUMENT);
             VkPipe* bp=&c->pipe[passIdx];
             if (!bp->pipeline || !bp->layout || !bp->dsLayout)
@@ -1633,6 +1733,15 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
     FfxFsr4VkContext* c = (FfxFsr4VkContext*)ci->scratchBuffer;
     memset(c, 0, sizeof(*c));
     c->dev=ci->device; c->phys=ci->physicalDevice; c->alloc=ci->allocator;
+    c->modelVariant = ci->modelVariant;
+    if (!getVariantPassLayout(c->modelVariant, &c->passCount,
+                              &c->postPassIdx, &c->rcasPassIdx, &c->spdPassIdx))
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (ci->extShaders && ci->extShaderCount != c->passCount)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (!ci->extShaders && c->modelVariant != FFX_FSR4_VARIANT_V07_INT8)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
     VkResult featureResult = queryRequiredFeatures(c);
     if (featureResult != VK_SUCCESS) return featureResult;
     VkResult formatResult = queryRequiredFormats(c);
@@ -1640,8 +1749,10 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
     /* Deep-copy the SPIR-V blobs so this context owns the data.
      * The caller may free its copy immediately after this call returns. */
     VkResult r = VK_SUCCESS;
-    for (int i = 0; i < FFX_FSR4_VK_PASS_COUNT; i++) {
-        const FfxFsr4VkShaderBlob* source = &ci->shaders[i];
+    const FfxFsr4VkShaderBlob* shaderArray =
+        ci->extShaders ? ci->extShaders : ci->shaders;
+    for (uint32_t i = 0; i < c->passCount; i++) {
+        const FfxFsr4VkShaderBlob* source = &shaderArray[i];
         if (!source->spirv && !source->sizeBytes) continue;
         if (!source->spirv || !source->sizeBytes ||
             (source->sizeBytes % sizeof(uint32_t)) != 0) {
@@ -1653,7 +1764,8 @@ VkResult ffxFsr4VkCreateContext(const FfxFsr4VkCreateInfo* ci, FfxInterface* out
         memcpy(copy, source->spirv, source->sizeBytes);
         c->blobs[i] = *source;
         c->blobs[i].spirv = copy;
-        r = ffxFsr4VkValidateShaderLayout(&c->blobs[i], (uint32_t)i);
+        r = ffxFsr4VkValidateVariantShaderLayout(
+            c->modelVariant, &c->blobs[i], i);
         if (r != VK_SUCCESS)
             goto fail;
     }
@@ -1768,7 +1880,7 @@ void ffxFsr4VkDestroyContext(FfxFsr4VkContext* c)
     for (int i = 0; i < MAX_PIPELINES; ++i)
         destroyPipeline(c, &c->pipe[i]);
     /* Free the deep-copied SPIR-V blobs allocated in ffxFsr4VkCreateContext. */
-    for (int i = 0; i < FFX_FSR4_VK_PASS_COUNT; i++) {
+    for (int i = 0; i < FFX_FSR4_VK_MAX_PASS_COUNT; i++) {
         free((void*)c->blobs[i].spirv);
         c->blobs[i].spirv = NULL;
     }
@@ -1964,4 +2076,11 @@ const void* ffxFsr4VkGetPrePassWeights(FfxInterface* iface, size_t* sizeBytes)
     FfxFsr4VkContext* c = (FfxFsr4VkContext*)iface->device;
     if (sizeBytes) *sizeBytes = c->prePassWeightsSize;
     return c->prePassWeights;
+}
+
+FfxFsr4ModelVariant ffxFsr4VkGetModelVariant(FfxInterface* iface)
+{
+    if (!iface || !iface->device) return FFX_FSR4_VARIANT_V07_INT8;
+    FfxFsr4VkContext* c = (FfxFsr4VkContext*)iface->device;
+    return c->modelVariant;
 }

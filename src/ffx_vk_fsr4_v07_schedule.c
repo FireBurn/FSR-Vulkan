@@ -139,3 +139,185 @@ const char *ffxFsr4ModelPresetName(FfxFsr4ModelPreset preset)
     default:                                      return "unknown";
     }
 }
+
+const char *ffxFsr4ModelVariantName(FfxFsr4ModelVariant variant)
+{
+    switch (variant) {
+    case FFX_FSR4_VARIANT_V07_INT8:       return "v07_i8";
+    case FFX_FSR4_VARIANT_412_NAVI2_INT8: return "412_i8_2";
+    case FFX_FSR4_VARIANT_412_LITE_INT8:  return "412_lite_i8";
+    case FFX_FSR4_VARIANT_412_RDNA3_INT8: return "412_i8";
+    default:                              return "unknown";
+    }
+}
+
+size_t ffxFsr4GetVariantScratchSize(FfxFsr4ModelVariant variant,
+                                    uint32_t maxOutputWidth,
+                                    uint32_t maxOutputHeight)
+{
+    if (!maxOutputWidth || !maxOutputHeight ||
+        maxOutputWidth > FFX_FSR4_DOT4_MAX_OUTPUT_WIDTH ||
+        maxOutputHeight > FFX_FSR4_DOT4_MAX_OUTPUT_HEIGHT)
+        return 0u;
+
+    if (variant == FFX_FSR4_VARIANT_412_LITE_INT8) {
+        if (maxOutputWidth <= 1920u && maxOutputHeight <= 1080u)
+            return 25027392u;
+        if (maxOutputWidth <= 3840u && maxOutputHeight <= 2160u)
+            return 99820992u;
+        return 398707392u;
+    }
+
+    return ffxFsr4GetDot4ScratchSize(maxOutputWidth, maxOutputHeight);
+}
+
+static FfxFsr4DispatchSize post_pad_dispatch(uint32_t tw, uint32_t th,
+                                             uint32_t mw, uint32_t mh,
+                                             uint32_t pad)
+{
+    int32_t diff_h = (int32_t)(mh + pad) - (int32_t)th;
+    int32_t diff_w = (int32_t)(mw + pad) - (int32_t)tw;
+    uint32_t dh = (uint32_t)((diff_h > 1 ? 1 : diff_h) + (int32_t)pad);
+    uint32_t dw = (uint32_t)((diff_w > 5 ? 5 : diff_w) + (int32_t)pad);
+    uint32_t border = (tw + dw) * (th + dh) - tw * th;
+    return dispatch_size(div_round_up(border, 32u), 1u);
+}
+
+bool ffxFsr4Build412Schedule(FfxFsr4ModelVariant variant,
+                             uint32_t outputWidth,
+                             uint32_t outputHeight,
+                             uint32_t maxOutputWidth,
+                             uint32_t maxOutputHeight,
+                             FfxFsr4412Schedule *outSchedule)
+{
+    FfxFsr4412Schedule schedule;
+    uint32_t tierMaxW, tierMaxH;
+
+    if (!outSchedule || !outputWidth || !outputHeight ||
+        !maxOutputWidth || !maxOutputHeight ||
+        outputWidth > maxOutputWidth || outputHeight > maxOutputHeight ||
+        maxOutputWidth > FFX_FSR4_DOT4_MAX_OUTPUT_WIDTH ||
+        maxOutputHeight > FFX_FSR4_DOT4_MAX_OUTPUT_HEIGHT)
+        return false;
+
+    if (maxOutputWidth > 3840u || maxOutputHeight > 2160u) {
+        tierMaxW = 7680u;
+        tierMaxH = 4320u;
+    } else if (maxOutputWidth > 1920u || maxOutputHeight > 1080u) {
+        tierMaxW = 3840u;
+        tierMaxH = 2160u;
+    } else {
+        tierMaxW = 1920u;
+        tierMaxH = 1080u;
+    }
+
+    memset(&schedule, 0, sizeof(schedule));
+    schedule.alignedWidth = (outputWidth + 7u) & ~7u;
+    schedule.alignedHeight = (outputHeight + 7u) & ~7u;
+
+    if (variant == FFX_FSR4_VARIANT_412_LITE_INT8) {
+        static const uint32_t denoms[FFX_FSR4_412_LITE_TENSORS] = {
+            2u, 1u, 2u, 4u, 4u, 2u, 1u, 1u, 1u
+        };
+        static const uint32_t pads[FFX_FSR4_412_LITE_TENSORS] = {
+            1u, 0u, 1u, 1u, 1u, 1u, 0u, 0u, 0u
+        };
+        schedule.tensorCount = FFX_FSR4_412_LITE_TENSORS;
+        schedule.modelPassCount = FFX_FSR4_412_LITE_MODEL_PASS_COUNT;
+        for (uint32_t i = 0; i < FFX_FSR4_412_LITE_TENSORS; ++i) {
+            schedule.tensorSizes[i][0] = schedule.alignedWidth / denoms[i];
+            schedule.tensorSizes[i][1] = schedule.alignedHeight / denoms[i];
+            schedule.tensorSizes[i][2] = 0u;
+            schedule.tensorSizes[i][3] = 0u;
+        }
+        schedule.pre = dispatch_size(
+            div_round_up(schedule.tensorSizes[0][0], 8u),
+            div_round_up(schedule.tensorSizes[0][1], 8u));
+        schedule.model[0] = post_pad_dispatch(
+            schedule.tensorSizes[0][0], schedule.tensorSizes[0][1],
+            tierMaxW / denoms[0], tierMaxH / denoms[0], pads[0]);
+        schedule.model[1] = dispatch_size(
+            div_round_up(schedule.tensorSizes[2][0], 32u),
+            div_round_up(schedule.tensorSizes[2][1], 4u));
+        schedule.model[2] = post_pad_dispatch(
+            schedule.tensorSizes[2][0], schedule.tensorSizes[2][1],
+            tierMaxW / denoms[2], tierMaxH / denoms[2], pads[2]);
+        schedule.model[3] = post_pad_dispatch(
+            schedule.tensorSizes[3][0], schedule.tensorSizes[3][1],
+            tierMaxW / denoms[3], tierMaxH / denoms[3], pads[3]);
+        schedule.model[4] = dispatch_size(
+            div_round_up(schedule.tensorSizes[4][0], 64u),
+            schedule.tensorSizes[4][1]);
+        schedule.model[5] = post_pad_dispatch(
+            schedule.tensorSizes[4][0], schedule.tensorSizes[4][1],
+            tierMaxW / denoms[4], tierMaxH / denoms[4], pads[4]);
+        schedule.model[6] = dispatch_size(
+            div_round_up(schedule.tensorSizes[5][0], 128u),
+            div_round_up(schedule.tensorSizes[5][1], 2u));
+        schedule.model[7] = post_pad_dispatch(
+            schedule.tensorSizes[5][0], schedule.tensorSizes[5][1],
+            tierMaxW / denoms[5], tierMaxH / denoms[5], pads[5]);
+        schedule.post = dispatch_size(
+            div_round_up(schedule.tensorSizes[6][0], 32u),
+            div_round_up(schedule.tensorSizes[6][1], 32u));
+        schedule.rcas = dispatch_size(
+            div_round_up(schedule.alignedWidth, 16u),
+            div_round_up(schedule.alignedHeight, 16u));
+        *outSchedule = schedule;
+        return true;
+    }
+
+    if (variant == FFX_FSR4_VARIANT_412_NAVI2_INT8 ||
+        variant == FFX_FSR4_VARIANT_412_RDNA3_INT8) {
+        static const uint32_t denoms[FFX_FSR4_412_MAX_TENSORS] = {
+            2u, 1u, 2u, 2u, 4u, 4u, 4u, 8u, 8u, 8u, 4u, 4u, 2u, 2u, 1u, 1u, 1u
+        };
+        static const uint32_t pads[FFX_FSR4_412_MAX_TENSORS] = {
+            1u, 0u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 0u, 0u, 0u
+        };
+        schedule.tensorCount = FFX_FSR4_412_MAX_TENSORS;
+        schedule.modelPassCount = FFX_FSR4_412_MODEL_PASS_COUNT;
+        for (uint32_t i = 0; i < FFX_FSR4_412_MAX_TENSORS; ++i) {
+            schedule.tensorSizes[i][0] = schedule.alignedWidth / denoms[i];
+            schedule.tensorSizes[i][1] = schedule.alignedHeight / denoms[i];
+            schedule.tensorSizes[i][2] = 0u;
+            schedule.tensorSizes[i][3] = 0u;
+        }
+        schedule.pre = dispatch_size(
+            div_round_up(schedule.tensorSizes[0][0], 8u),
+            div_round_up(schedule.tensorSizes[0][1], 8u));
+        schedule.model[0] = post_pad_dispatch(
+            schedule.tensorSizes[0][0], schedule.tensorSizes[0][1],
+            tierMaxW / denoms[0], tierMaxH / denoms[0], pads[0]);
+        for (uint32_t t = 2u; t <= 13u; ++t) {
+            uint32_t m_idx = (t - 2u) * 2u + 1u;
+            if ((t == 10u || t == 12u) &&
+                variant == FFX_FSR4_VARIANT_412_NAVI2_INT8) {
+                schedule.model[m_idx] = dispatch_size(
+                    div_round_up(schedule.tensorSizes[t][0], 16u),
+                    div_round_up(schedule.tensorSizes[t][1], 8u));
+            } else if (t == 10u || t == 12u) {
+                schedule.model[m_idx] = dispatch_size(
+                    div_round_up(schedule.tensorSizes[t][0], 128u),
+                    div_round_up(schedule.tensorSizes[t][1], 2u));
+            } else {
+                schedule.model[m_idx] = dispatch_size(
+                    div_round_up(schedule.tensorSizes[t][0], 64u),
+                    schedule.tensorSizes[t][1]);
+            }
+            schedule.model[m_idx + 1u] = post_pad_dispatch(
+                schedule.tensorSizes[t][0], schedule.tensorSizes[t][1],
+                tierMaxW / denoms[t], tierMaxH / denoms[t], pads[t]);
+        }
+        schedule.post = dispatch_size(
+            div_round_up(schedule.tensorSizes[14][0], 32u),
+            div_round_up(schedule.tensorSizes[14][1], 32u));
+        schedule.rcas = dispatch_size(
+            div_round_up(schedule.alignedWidth, 16u),
+            div_round_up(schedule.alignedHeight, 16u));
+        *outSchedule = schedule;
+        return true;
+    }
+
+    return false;
+}

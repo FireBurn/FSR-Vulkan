@@ -14,6 +14,8 @@ extern "C" {
 #define FFX_FSR4_V07_ASSET_PATH_MAX 96u
 #define FFX_FSR4_V07_INITIALIZER_BYTES 89216u
 #define FFX_FSR4_V07_PRE_PASS_WEIGHTS_BYTES 1024u
+#define FFX_FSR4_412_INITIALIZER_BYTES 131072u
+#define FFX_FSR4_412_LITE_INITIALIZER_BYTES 27392u
 
 typedef struct FfxFsr4V07AssetSet {
     FfxFsr4ModelPreset preset;
@@ -26,6 +28,20 @@ typedef struct FfxFsr4V07AssetSet {
     char rcas[FFX_FSR4_V07_ASSET_PATH_MAX];
     char spdAutoExposure[FFX_FSR4_V07_ASSET_PATH_MAX];
 } FfxFsr4V07AssetSet;
+
+typedef struct FfxFsr4412AssetSet {
+    FfxFsr4ModelVariant variant;
+    FfxFsr4ModelPreset preset;
+    char tier[5];
+    uint32_t modelPassCount;
+    size_t expectedInitializerBytes;
+    char pre[FFX_FSR4_V07_ASSET_PATH_MAX];
+    char model[FFX_FSR4_412_MODEL_PASS_COUNT][FFX_FSR4_V07_ASSET_PATH_MAX];
+    char post[FFX_FSR4_V07_ASSET_PATH_MAX];
+    char initializer[FFX_FSR4_V07_ASSET_PATH_MAX];
+    char rcas[FFX_FSR4_V07_ASSET_PATH_MAX];
+    char spdAutoExposure[FFX_FSR4_V07_ASSET_PATH_MAX];
+} FfxFsr4412AssetSet;
 
 /* Selects the resolution-specialized tensor graph tier for an output extent. */
 const char *ffxFsr4V07SelectAssetTier(uint32_t outputWidth,
@@ -41,6 +57,12 @@ bool ffxFsr4V07BuildAssetSet(FfxFsr4ModelPreset preset,
                              uint32_t outputWidth,
                              uint32_t outputHeight,
                              FfxFsr4V07AssetSet *outAssets);
+
+bool ffxFsr4412BuildAssetSet(FfxFsr4ModelVariant variant,
+                             FfxFsr4ModelPreset preset,
+                             uint32_t outputWidth,
+                             uint32_t outputHeight,
+                             FfxFsr4412AssetSet *outAssets);
 
 #ifdef __cplusplus
 }

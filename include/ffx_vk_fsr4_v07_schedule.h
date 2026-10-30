@@ -15,8 +15,19 @@ extern "C" {
 #endif
 
 #define FFX_FSR4_MODEL_PASS_COUNT 12u
+#define FFX_FSR4_412_MODEL_PASS_COUNT 25u
+#define FFX_FSR4_412_LITE_MODEL_PASS_COUNT 8u
+#define FFX_FSR4_412_MAX_TENSORS 17u
+#define FFX_FSR4_412_LITE_TENSORS 9u
 #define FFX_FSR4_DOT4_MAX_OUTPUT_WIDTH 7680u
 #define FFX_FSR4_DOT4_MAX_OUTPUT_HEIGHT 4320u
+
+typedef enum FfxFsr4ModelVariant {
+    FFX_FSR4_VARIANT_V07_INT8 = 0,
+    FFX_FSR4_VARIANT_412_NAVI2_INT8 = 1,
+    FFX_FSR4_VARIANT_412_LITE_INT8 = 2,
+    FFX_FSR4_VARIANT_412_RDNA3_INT8 = 3,
+} FfxFsr4ModelVariant;
 
 typedef struct FfxFsr4DispatchSize {
     uint32_t x;
@@ -32,6 +43,18 @@ typedef struct FfxFsr4Dot4Schedule {
     FfxFsr4DispatchSize post;
     FfxFsr4DispatchSize rcas;
 } FfxFsr4Dot4Schedule;
+
+typedef struct FfxFsr4412Schedule {
+    uint32_t alignedWidth;
+    uint32_t alignedHeight;
+    uint32_t tensorCount;
+    uint32_t tensorSizes[FFX_FSR4_412_MAX_TENSORS][4];
+    uint32_t modelPassCount;
+    FfxFsr4DispatchSize pre;
+    FfxFsr4DispatchSize model[FFX_FSR4_412_MODEL_PASS_COUNT];
+    FfxFsr4DispatchSize post;
+    FfxFsr4DispatchSize rcas;
+} FfxFsr4412Schedule;
 
 /*
  * SPD auto-exposure uses one 64x64 workgroup per input tile.  The shader can
@@ -78,6 +101,21 @@ FfxFsr4ModelPreset ffxFsr4SelectModelPreset(uint32_t renderWidth,
                                            bool dynamicResolutionModel);
 
 const char *ffxFsr4ModelPresetName(FfxFsr4ModelPreset preset);
+
+/* Build the FSR 4.1.2 (2.4.0.4370) tensor and pass dispatch schedule. */
+bool ffxFsr4Build412Schedule(FfxFsr4ModelVariant variant,
+                             uint32_t outputWidth,
+                             uint32_t outputHeight,
+                             uint32_t maxOutputWidth,
+                             uint32_t maxOutputHeight,
+                             FfxFsr4412Schedule *outSchedule);
+
+/* Activation scratch sizes for v07 and FSR 4.1.2 variants. */
+size_t ffxFsr4GetVariantScratchSize(FfxFsr4ModelVariant variant,
+                                    uint32_t maxOutputWidth,
+                                    uint32_t maxOutputHeight);
+
+const char *ffxFsr4ModelVariantName(FfxFsr4ModelVariant variant);
 
 #ifdef __cplusplus
 }

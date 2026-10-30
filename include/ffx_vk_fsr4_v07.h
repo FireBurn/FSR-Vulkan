@@ -28,6 +28,7 @@
 #include <stddef.h>
 
 #include "ffx_vk_fsr4_v07_types.h"
+#include "ffx_vk_fsr4_v07_schedule.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,8 +75,13 @@ typedef struct FfxFsr4VkExternalImageState {
     VkAccessFlags           restoreAccessMask;
 } FfxFsr4VkExternalImageState;
 
-// FSR4 has: pass0 (pre), pass1-12 (model), pass13 (post), rcas, spd_auto_exposure
+// FSR4-v07 has: pass0 (pre), pass1-12 (model), pass13 (post), rcas, spd_auto_exposure
 #define FFX_FSR4_VK_PASS_COUNT 16
+// FSR 4.1.2 i8_2 / i8 have: pass0 (pre), pass1-25 (model + border-pad), pass26 (post), rcas, spd_auto_exposure
+#define FFX_FSR4_412_VK_PASS_COUNT 29
+// FSR 4.1.2 lite_i8 has: pass0 (pre), pass1-8 (model + border-pad), pass9 (post), rcas, spd_auto_exposure
+#define FFX_FSR4_412_LITE_VK_PASS_COUNT 12
+#define FFX_FSR4_VK_MAX_PASS_COUNT 29
 
 typedef struct FfxFsr4VkCreateInfo {
     VkDevice                    device;
@@ -84,7 +90,7 @@ typedef struct FfxFsr4VkCreateInfo {
     // Optional custom allocator; pass NULL for default VkAllocationCallbacks
     const VkAllocationCallbacks* allocator;
 
-    // All SPIR-V blobs for each shader pass.
+    // All SPIR-V blobs for each shader pass (v07 16-pass default array).
     // Index mapping (same as DX12 pass IDs):
     //   [0]    = pre-pass  (fsr4_model_v07_i8_<preset>/pre.hlsl)
     //   [1-12] = model passes (passes_<res>.hlsl, MLSR_PASS_N define)
@@ -95,9 +101,9 @@ typedef struct FfxFsr4VkCreateInfo {
 
     /*
      * Model data is deliberately supplied separately from shader bytecode.
-     * The generated INT8 passes read an initializer buffer and the pre-pass
-     * reads a second, 1 KiB constant block.  Omitting either produces valid
-     * Vulkan dispatches but undefined neural-network output.
+     * The generated INT8 passes read an initializer buffer and the v07 pre-pass
+     * reads a second, 1 KiB constant block.  For FSR 4.1.2 variants, pre-pass
+     * weights are stored inside modelInitializer, so prePassWeights may be NULL.
      *
      * The backend deep-copies both blobs during creation.
      */
@@ -110,6 +116,14 @@ typedef struct FfxFsr4VkCreateInfo {
     // Allocate at least ffxFsr4VkGetScratchMemorySize() bytes.
     void*  scratchBuffer;
     size_t scratchBufferSize;
+
+    // Optional FSR 4.1.2 model variant and extended shader array (up to 29 passes).
+    // When modelVariant == FFX_FSR4_VARIANT_V07_INT8 (0) and extShaders == NULL,
+    // `shaders[0..15]` is used. When extShaders != NULL, `extShaders[0..extShaderCount-1]`
+    // overrides `shaders[]`.
+    FfxFsr4ModelVariant         modelVariant;
+    const FfxFsr4VkShaderBlob*  extShaders;
+    uint32_t                    extShaderCount;
 } FfxFsr4VkCreateInfo;
 
 // ---------------------------------------------------------------------------
@@ -123,6 +137,9 @@ size_t ffxFsr4VkGetScratchMemorySize(void);
 // the same validation for every supplied module.
 VkResult ffxFsr4VkValidateShaderLayout(const FfxFsr4VkShaderBlob* shader,
                                        uint32_t passIndex);
+VkResult ffxFsr4VkValidateVariantShaderLayout(FfxFsr4ModelVariant variant,
+                                              const FfxFsr4VkShaderBlob* shader,
+                                              uint32_t passIndex);
 
 // ---------------------------------------------------------------------------
 // Create a Vulkan backend context and fill in the FfxInterface table.
@@ -188,6 +205,7 @@ void ffxFsr4VkMarkImageInitialized  (FfxInterface* iface, FfxResourceInternal ri
 /* Provider-side access to the backend-owned deep copies of model data. */
 const void* ffxFsr4VkGetModelInitializer(FfxInterface* iface, size_t* sizeBytes);
 const void* ffxFsr4VkGetPrePassWeights(FfxInterface* iface, size_t* sizeBytes);
+FfxFsr4ModelVariant ffxFsr4VkGetModelVariant(FfxInterface* iface);
 
 #ifdef __cplusplus
 }
