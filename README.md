@@ -7,12 +7,26 @@ implementation can be reused by other Vulkan applications.
 Standalone source: <https://github.com/FireBurn/FSR-Vulkan>. The same tree is
 vendored by Q2RTX for its reference integration.
 
-The project provides a reusable native Vulkan super resolution and frame
-reconstruction library unifying FSR, XeSS, and DLSS/d4r, with Q2RTX as a reference
-consumer. Both XeSS (U-Net convolutional reconstruction with DP4a) and DLSS/d4r
-(Swin Transformer windowed reconstruction with WMMA) feature fully native, open
-SPIR-V compute shader pipelines embedded directly into the library, requiring zero
-Windows DLLs, Wine, or DirectX proxies.
+The project develops reusable native Vulkan super resolution and frame
+reconstruction, with Q2RTX as a reference consumer. Q2RTX's existing XeSS and
+DLSS/d4r integration paths execute experimental spatial SPIR-V filters.
+Separately, the experimental C++17 [recovered XeSS context](examples/xess-recovered/README.md)
+executes the complete learned fourteen-pass graph on a caller-owned device,
+using caller-supplied shader/model bytes and GPU images. The verified profile
+enables 565x318 -> 960x540, 753x424 -> 1280x720 and 1130x636 -> 1920x1080:
+four-frame reference comparisons pass exactly on Renoir with motion/jitter;
+1080p also passes on Navi22 against its own reference. Per-slot descriptor
+bindings allow queued frames without an internal wait; two-frame batches retain
+exact moving-depth reference equality on both GPUs. This context is not
+yet connected to Q2RTX or the unified wrapper. Other profiles/GPUs and DLSS
+learned-model execution remain incomplete.
+
+C consumers can use `ffx_vk_xess_recovered.h` and the exported
+`ffx-vulkan::xess-recovered` target. The API accepts one packed XESSVK1 model
+asset, copies its payloads during creation, and records against caller-owned
+images/commands. Exact profile sizes are queried through the API. The
+[integration example](examples/xess-recovered/README.md) covers C/C++ loading,
+frame slots and synchronization; the game adapter still needs input conversion.
 
 ### Experimental shader conversion
 
@@ -548,3 +562,32 @@ See [UPSTREAM.md](UPSTREAM.md) for the source/version import plan and license
 provenance. [NOTICE.md](NOTICE.md) describes the third-party and model-payload
 boundary, while [PUBLISHING.md](PUBLISHING.md) records the clean subtree split
 and standalone verification procedure.
+## Model settings catalog
+
+`include/ffx_vk_scaler_catalog.h` is a header-only C/C++ interface for host
+settings UIs. It has no Vulkan or engine dependencies. Enumerate
+`ffxVkScalerModel(id)` and `ffxVkScalerOption(id)`, use
+`ffxVkScalerHasOption` to build controls, and reevaluate
+`ffxVkScalerOptionVisible` after changing the model or a dependent option.
+`ffxVkScalerOptionValueValid` checks incoming values; range steps are UI
+increments, not quantization requirements. Persist values by model/option
+keys so switching models does not overwrite another model's preferences.
+
+The catalog describes implementation status and option applicability.
+`ffxVkScalerOptionConfigurable` also accepts a mask of successfully created
+runtime contexts, so an unavailable model exposes no tuning controls.
+Consumers supply that mask and report the actual active provider/fallback.
+XeSS and DLSS entries currently
+describe spatial prototypes, **not recovered learned-model execution**.
+Detailed device requirements and separate frame-generation/reconstruction
+option catalogs remain work in progress. Q2RTX's adapter is `src/client/ui/scaler.c`;
+its cvar names and widgets deliberately stay outside this library.
+
+The Unified SR wrapper exposes `ffxVkUnifiedSrGetReadiness` separately from
+hardware recommendations and offline context initialization. Its FSR3/FSR4
+dispatch integration remains unimplemented and returns
+`VK_ERROR_FEATURE_NOT_PRESENT`; absent prototype pipelines and missing
+resources also fail. `VK_SUCCESS` from dispatch no longer means a successful
+no-op. The minimal sample demonstrates offline configuration/readiness, not
+GPU execution. A real consumer must provide valid Vulkan resources and a
+runnable backend before dispatching.

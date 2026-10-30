@@ -11,11 +11,11 @@
 int main(void)
 {
     /* 1. Test upscaler and tier names */
-    assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_AUTO), "Automatic (Hardware Optimal)") == 0);
+    assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_AUTO), "Automatic (hardware recommendation)") == 0);
     assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_FSR3), "AMD FidelityFX Super Resolution 3.1") == 0);
     assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_FSR4), "AMD FidelityFX Super Resolution 4 (INT8/DOT4)") == 0);
-    assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_DLSS), "NVIDIA DLSS / AMD d4r (Tensor/WMMA)") == 0);
-    assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_XESS), "Intel XeSS (DP4a/XMX)") == 0);
+    assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_DLSS), "DLSS spatial prototype") == 0);
+    assert(strcmp(ffxVkUnifiedSrGetUpscalerName(FFX_VK_UPSCALER_XESS), "XeSS spatial prototype") == 0);
 
     assert(strstr(ffxVkUnifiedSrGetGpuTierName(FFX_VK_GPU_TIER_GENERIC_COMPUTE), "Generic Compute") != NULL);
     assert(strstr(ffxVkUnifiedSrGetGpuTierName(FFX_VK_GPU_TIER_INT8_DOT4), "Integer Dot Product") != NULL);
@@ -143,10 +143,40 @@ int main(void)
     dispatchInfo.inputExtent = (VkExtent2D){ 1708, 960 };
     dispatchInfo.outputExtent = (VkExtent2D){ 2560, 1440 };
 
-    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_SUCCESS);
+    const char *reason = NULL;
+    assert(ffxVkUnifiedSrGetReadiness(NULL, &reason) == VK_ERROR_INITIALIZATION_FAILED);
+    assert(reason && reason[0]);
+    assert(ffxVkUnifiedSrGetReadiness(&ctx, &reason) == VK_ERROR_FEATURE_NOT_PRESENT);
+    assert(strstr(reason, "not implemented"));
+    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_ERROR_FEATURE_NOT_PRESENT);
+    ctx.activeUpscaler = FFX_VK_UPSCALER_FSR4;
+    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_ERROR_FEATURE_NOT_PRESENT);
+    ctx.activeUpscaler = FFX_VK_UPSCALER_XESS;
+    assert(ffxVkUnifiedSrGetReadiness(&ctx, NULL) == VK_ERROR_INITIALIZATION_FAILED);
+    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_ERROR_INITIALIZATION_FAILED);
+    ctx.activeUpscaler = FFX_VK_UPSCALER_DLSS;
+    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_ERROR_INITIALIZATION_FAILED);
+
+    /* Fake handles exercise rejection before any Vulkan call. A pipeline
+     * must not let missing resources turn dispatch into a successful no-op. */
+    ctx.createInfo.device = (VkDevice)(uintptr_t)1;
+    ctx.dlssPipeline.pipeline = (VkPipeline)(uintptr_t)1;
+    assert(ffxVkUnifiedSrGetReadiness(&ctx, NULL) == VK_SUCCESS);
+    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_ERROR_VALIDATION_FAILED_EXT);
+    ctx.activeUpscaler = FFX_VK_UPSCALER_XESS;
+    ctx.xessPipeline.pipeline = (VkPipeline)(uintptr_t)1;
+    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_ERROR_VALIDATION_FAILED_EXT);
+    ctx.activeUpscaler = FFX_VK_UPSCALER_COUNT;
+    assert(ffxVkUnifiedSrDispatch(&ctx, &dispatchInfo) == VK_ERROR_FEATURE_NOT_PRESENT);
+    ctx.createInfo.device = VK_NULL_HANDLE;
+    ctx.dlssPipeline.pipeline = VK_NULL_HANDLE;
+    ctx.xessPipeline.pipeline = VK_NULL_HANDLE;
 
     ffxVkUnifiedSrDestroy(&ctx);
     assert(ctx.initialized == 0);
+    assert(ffxVkUnifiedSrGetReadiness(&ctx, NULL) == VK_ERROR_INITIALIZATION_FAILED);
+    createInfo.preferredUpscaler = FFX_VK_UPSCALER_COUNT;
+    assert(ffxVkUnifiedSrCreate(&ctx, &createInfo) == VK_ERROR_INITIALIZATION_FAILED);
 
     return 0;
 }

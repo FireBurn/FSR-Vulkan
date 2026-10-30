@@ -14,8 +14,12 @@
 #include <ffx_vk_rayregeneration_contract.h>
 #include <ffx_vk_temporal_lifecycle.h>
 
+extern "C" int xess_recovered_c_contract(void);
+
 int main()
 {
+    if (xess_recovered_c_contract() != 0)
+        return 91;
     FfxFsr4V07AssetSet fsr4_assets{};
     if (!ffxFsr4V07BuildAssetSet(FFX_FSR4_MODEL_PRESET_QUALITY,
                                  1920u, 1080u, &fsr4_assets))

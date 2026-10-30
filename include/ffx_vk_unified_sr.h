@@ -154,7 +154,16 @@ VkResult ffxVkUnifiedSrCreate(
     const FfxVkUnifiedSrCreateInfo *info);
 #define ffxVkUnifiedSrCreateContext ffxVkUnifiedSrCreate
 
-/* Dispatch active upscaler */
+/* Query executable readiness separately from hardware recommendation or
+ * metadata-only initialization. reason, if non-NULL, receives a static string.
+ * FSR3/FSR4 dispatch integration is not implemented in this wrapper yet.
+ * XeSS/DLSS paths currently execute spatial prototypes, not recovered models.
+ */
+VkResult ffxVkUnifiedSrGetReadiness(
+    const FfxVkUnifiedSrContext *ctx, const char **reason);
+
+/* Dispatch active upscaler. VK_SUCCESS means GPU work was recorded; a context
+ * initialized without a device is not a dry-run dispatch implementation. */
 VkResult ffxVkUnifiedSrDispatch(
     FfxVkUnifiedSrContext *ctx,
     const FfxVkUnifiedSrDispatchInfo *dispatchInfo);

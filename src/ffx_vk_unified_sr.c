@@ -14,15 +14,15 @@ const char *ffxVkUnifiedSrGetUpscalerName(FfxVkUpscalerType upscaler)
 {
     switch (upscaler) {
     case FFX_VK_UPSCALER_AUTO:
-        return "Automatic (Hardware Optimal)";
+        return "Automatic (hardware recommendation)";
     case FFX_VK_UPSCALER_FSR3:
         return "AMD FidelityFX Super Resolution 3.1";
     case FFX_VK_UPSCALER_FSR4:
         return "AMD FidelityFX Super Resolution 4 (INT8/DOT4)";
     case FFX_VK_UPSCALER_DLSS:
-        return "NVIDIA DLSS / AMD d4r (Tensor/WMMA)";
+        return "DLSS spatial prototype";
     case FFX_VK_UPSCALER_XESS:
-        return "Intel XeSS (DP4a/XMX)";
+        return "XeSS spatial prototype";
     default:
         return "Unknown Upscaler";
     }
@@ -287,7 +287,9 @@ VkResult ffxVkUnifiedSrCreate(
         return VK_ERROR_INITIALIZATION_FAILED;
 
     if (info->structSize != sizeof(FfxVkUnifiedSrCreateInfo) ||
-        info->version != FFX_VK_UNIFIED_SR_VERSION)
+        info->version != FFX_VK_UNIFIED_SR_VERSION ||
+        info->preferredUpscaler < FFX_VK_UPSCALER_AUTO ||
+        info->preferredUpscaler >= FFX_VK_UPSCALER_COUNT)
         return VK_ERROR_INITIALIZATION_FAILED;
 
     memset(ctx, 0, sizeof(*ctx));
@@ -306,14 +308,98 @@ VkResult ffxVkUnifiedSrCreate(
 
     /* Initialize native compute pipelines if a valid Vulkan device was provided */
     if (info->device != VK_NULL_HANDLE) {
+        FfxVkPortableResult result = FFX_VK_PORTABLE_OK;
         if (ctx->activeUpscaler == FFX_VK_UPSCALER_XESS) {
-            (void)ffxVkXessCreatePipeline(info->device, &ctx->xessPipeline);
+            result = ffxVkXessCreatePipeline(info->device, &ctx->xessPipeline);
         } else if (ctx->activeUpscaler == FFX_VK_UPSCALER_DLSS) {
-            (void)ffxVkDlssCreatePipeline(info->device, &ctx->dlssPipeline);
+            result = ffxVkDlssCreatePipeline(info->device, &ctx->dlssPipeline);
+        } else if ((ctx->activeUpscaler == FFX_VK_UPSCALER_FSR3 ||
+                    ctx->activeUpscaler == FFX_VK_UPSCALER_FSR4) &&
+                   info->physicalDevice != VK_NULL_HANDLE &&
+                   info->maxInputExtent.width > 0 && info->maxInputExtent.height > 0 &&
+                   info->maxOutputExtent.width > 0 && info->maxOutputExtent.height > 0) {
+            FfxVkPortableDeviceInfo devInfo;
+            FfxVkPortableUpscaleCreateInfo upInfo;
+            FfxVkPortableUpscaleContext *fsr3Ctx = NULL;
+            memset(&devInfo, 0, sizeof(devInfo));
+            devInfo.structSize = sizeof(devInfo);
+            devInfo.physicalDevice = info->physicalDevice;
+            devInfo.device = info->device;
+            devInfo.getDeviceProcAddr = vkGetDeviceProcAddr;
+            devInfo.shaderFloat16Enabled = ctx->capabilities.supportsFp16 ? VK_TRUE : VK_FALSE;
+            devInfo.shaderStorageImageWriteWithoutFormatEnabled =
+                ctx->capabilities.supportsFormatlessWrite ? VK_TRUE : VK_FALSE;
+
+            memset(&upInfo, 0, sizeof(upInfo));
+            upInfo.structSize = sizeof(upInfo);
+            upInfo.flags = FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
+                FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE;
+            upInfo.maxRenderSize.width = info->maxInputExtent.width;
+            upInfo.maxRenderSize.height = info->maxInputExtent.height;
+            upInfo.maxOutputSize.width = info->maxOutputExtent.width;
+            upInfo.maxOutputSize.height = info->maxOutputExtent.height;
+
+            if (ffxVkPortableUpscaleContextCreate(&devInfo, &upInfo, &fsr3Ctx) == FFX_VK_PORTABLE_OK) {
+                ctx->backendContext = fsr3Ctx;
+            }
+        }
+        if (result != FFX_VK_PORTABLE_OK) {
+            ffxVkUnifiedSrDestroy(ctx);
+            return VK_ERROR_INITIALIZATION_FAILED;
         }
     }
 
     return VK_SUCCESS;
+}
+
+VkResult ffxVkUnifiedSrGetReadiness(
+    const FfxVkUnifiedSrContext *ctx, const char **reason)
+{
+    VkResult result = VK_ERROR_INITIALIZATION_FAILED;
+    const char *message = "Unified SR context is not initialized";
+    if (ctx && ctx->initialized) {
+        switch (ctx->activeUpscaler) {
+        case FFX_VK_UPSCALER_FSR3:
+            if (ctx->createInfo.device && ctx->backendContext) {
+                result = VK_SUCCESS;
+                message = "AMD FidelityFX Super Resolution 3.1.4 native Vulkan ready";
+            } else {
+                message = "Auto unavailable: FSR dispatch integration is not implemented";
+                result = VK_ERROR_FEATURE_NOT_PRESENT;
+            }
+            break;
+        case FFX_VK_UPSCALER_FSR4:
+            if (ctx->createInfo.device && ctx->backendContext) {
+                result = VK_SUCCESS;
+                message = "AMD FidelityFX Super Resolution 4 / 3.1.4 native Vulkan ready";
+            } else {
+                message = "Auto unavailable: FSR dispatch integration is not implemented";
+                result = VK_ERROR_FEATURE_NOT_PRESENT;
+            }
+            break;
+        case FFX_VK_UPSCALER_XESS:
+            message = "XeSS prototype pipeline is unavailable";
+            if (ctx->createInfo.device && ctx->xessPipeline.pipeline) {
+                result = VK_SUCCESS;
+                message = "XeSS spatial prototype ready (not recovered model inference)";
+            }
+            break;
+        case FFX_VK_UPSCALER_DLSS:
+            message = "DLSS prototype pipeline is unavailable";
+            if (ctx->createInfo.device && ctx->dlssPipeline.pipeline) {
+                result = VK_SUCCESS;
+                message = "DLSS spatial prototype ready (not recovered model inference)";
+            }
+            break;
+        default:
+            message = "Unified SR selected backend is invalid";
+            result = VK_ERROR_FEATURE_NOT_PRESENT;
+            break;
+        }
+    }
+    if (reason)
+        *reason = message;
+    return result;
 }
 
 VkResult ffxVkUnifiedSrDispatch(
@@ -333,6 +419,17 @@ VkResult ffxVkUnifiedSrDispatch(
     if (!dispatchInfo->inputExtent.width || !dispatchInfo->inputExtent.height ||
         !dispatchInfo->outputExtent.width || !dispatchInfo->outputExtent.height)
         return VK_ERROR_INITIALIZATION_FAILED;
+
+    VkResult readiness = ffxVkUnifiedSrGetReadiness(ctx, NULL);
+    if (readiness != VK_SUCCESS)
+        return readiness;
+
+    /* Missing images/views must never turn this into a successful no-op. */
+    if (!dispatchInfo->colorIn.image || !dispatchInfo->colorIn.view ||
+        !dispatchInfo->depth.image || !dispatchInfo->depth.view ||
+        !dispatchInfo->motionVectors.image || !dispatchInfo->motionVectors.view ||
+        !dispatchInfo->colorOut.image || !dispatchInfo->colorOut.view)
+        return VK_ERROR_VALIDATION_FAILED_EXT;
 
     /* Route dispatch according to active upscaler */
     switch (ctx->activeUpscaler) {
@@ -425,9 +522,51 @@ VkResult ffxVkUnifiedSrDispatch(
         break;
     }
     case FFX_VK_UPSCALER_FSR3:
-    case FFX_VK_UPSCALER_FSR4:
-    default:
+    case FFX_VK_UPSCALER_FSR4: {
+        if (!ctx->backendContext)
+            return VK_ERROR_FEATURE_NOT_PRESENT;
+        FfxVkPortableUpscaleDispatchInfo fDsp;
+        memset(&fDsp, 0, sizeof(fDsp));
+        fDsp.structSize = sizeof(fDsp);
+        fDsp.commandBuffer = dispatchInfo->commandBuffer;
+        fDsp.color = dispatchInfo->colorIn;
+        fDsp.depth = dispatchInfo->depth;
+        fDsp.motionVectors = dispatchInfo->motionVectors;
+        fDsp.exposure = dispatchInfo->exposure;
+        if (!fDsp.exposure.structSize)
+            fDsp.exposure.structSize = sizeof(fDsp.exposure);
+        fDsp.reactiveMask = dispatchInfo->reactiveMask;
+        if (!fDsp.reactiveMask.structSize)
+            fDsp.reactiveMask.structSize = sizeof(fDsp.reactiveMask);
+        fDsp.transparencyAndCompositionMask.structSize =
+            sizeof(fDsp.transparencyAndCompositionMask);
+        fDsp.output = dispatchInfo->colorOut;
+        fDsp.jitterOffset.x = dispatchInfo->jitterOffsetX;
+        fDsp.jitterOffset.y = dispatchInfo->jitterOffsetY;
+        fDsp.motionVectorScale.x = (float)dispatchInfo->inputExtent.width;
+        fDsp.motionVectorScale.y = (float)dispatchInfo->inputExtent.height;
+        fDsp.renderSize.width = dispatchInfo->inputExtent.width;
+        fDsp.renderSize.height = dispatchInfo->inputExtent.height;
+        fDsp.outputSize.width = dispatchInfo->outputExtent.width;
+        fDsp.outputSize.height = dispatchInfo->outputExtent.height;
+        fDsp.enableSharpening = dispatchInfo->sharpness > 0.0f ? VK_TRUE : VK_FALSE;
+        fDsp.sharpness = dispatchInfo->sharpness;
+        fDsp.frameTimeMilliseconds = dispatchInfo->frameTimeMs > 0.0f
+            ? dispatchInfo->frameTimeMs : 16.667f;
+        fDsp.preExposure = 1.0f;
+        fDsp.reset = dispatchInfo->resetHistory ? VK_TRUE : VK_FALSE;
+        fDsp.cameraNear = 0.1f;
+        fDsp.cameraFar = 1000.0f;
+        fDsp.cameraVerticalFovRadians = 1.0f;
+        fDsp.viewSpaceToMeters = 1.0f;
+        FfxVkPortableResult pres = ffxVkPortableUpscaleContextRecordDispatch(
+            (FfxVkPortableUpscaleContext *)ctx->backendContext, &fDsp);
+        if (pres != FFX_VK_PORTABLE_OK)
+            return VK_ERROR_UNKNOWN;
         break;
+    }
+    default:
+        return VK_ERROR_FEATURE_NOT_PRESENT;
     }
 
     return VK_SUCCESS;
@@ -439,6 +578,10 @@ void ffxVkUnifiedSrDestroy(FfxVkUnifiedSrContext *ctx)
         return;
 
     if (ctx->createInfo.device != VK_NULL_HANDLE) {
+        if (ctx->backendContext != NULL) {
+            (void)ffxVkPortableUpscaleContextDestroy(
+                (FfxVkPortableUpscaleContext *)ctx->backendContext);
+        }
         ffxVkXessDestroyPipeline(ctx->createInfo.device, &ctx->xessPipeline);
         ffxVkDlssDestroyPipeline(ctx->createInfo.device, &ctx->dlssPipeline);
     }

@@ -256,6 +256,20 @@ else()
         -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(ffx_vulkan_xess_recovered STATIC src/ffx_vk_xess_recovered.cpp)
+add_library(ffx-vulkan::xess-recovered ALIAS ffx_vulkan_xess_recovered)
+set_property(TARGET ffx_vulkan_xess_recovered PROPERTY EXPORT_NAME xess-recovered)
+target_compile_features(ffx_vulkan_xess_recovered PRIVATE cxx_std_17)
+target_include_directories(ffx_vulkan_xess_recovered PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+target_link_libraries(ffx_vulkan_xess_recovered PUBLIC Vulkan::Vulkan)
+if(MSVC)
+    target_compile_options(ffx_vulkan_xess_recovered PRIVATE /W4)
+else()
+    target_compile_options(ffx_vulkan_xess_recovered PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # Unified Super Resolution umbrella API. Automatically queries GPU vendor and
 # feature tier, auto-selects optimal upscaler (DLSS/d4r, FSR4, XeSS, FSR3),
 # and provides a 1-line integration path for any Vulkan engine.
@@ -668,6 +682,7 @@ target_link_libraries(ffx_vulkan_effects INTERFACE
     ffx-vulkan::radiancecache-contract
     ffx-vulkan::dlss-contract
     ffx-vulkan::xess-contract
+    ffx-vulkan::xess-recovered
     ffx-vulkan::mlframegen-contract
     ffx-vulkan::unified-sr
     ffx-vulkan::fsr4-v07-assets
@@ -761,6 +776,7 @@ if(FFX_VK_PORTABLE_INSTALL)
         ffx_vulkan_radiancecache_contract
         ffx_vulkan_dlss_contract
         ffx_vulkan_xess_contract
+        ffx_vulkan_xess_recovered
         ffx_vulkan_mlframegen_contract
         ffx_vulkan_unified_sr
         ffx_vulkan_fsr4_v07_assets
@@ -823,6 +839,21 @@ endif()
 
 if(FFX_VK_PORTABLE_BUILD_TESTS)
     enable_testing()
+    add_executable(ffx_vk_xess_recovered_c_test
+        examples/installed-full-stack/xess_c_contract.c)
+    target_compile_features(ffx_vk_xess_recovered_c_test PRIVATE c_std_11)
+    target_compile_definitions(ffx_vk_xess_recovered_c_test PRIVATE FFX_XESS_C_CONTRACT_STANDALONE=1)
+    target_link_libraries(ffx_vk_xess_recovered_c_test PRIVATE ffx-vulkan::xess-recovered)
+    set_property(TARGET ffx_vk_xess_recovered_c_test PROPERTY LINKER_LANGUAGE CXX)
+    add_test(NAME ffx_vk_xess_recovered_c COMMAND ffx_vk_xess_recovered_c_test)
+    add_executable(ffx_vk_xess_recovered_blob_test tests/xess_recovered_blob_test.c)
+    target_compile_features(ffx_vk_xess_recovered_blob_test PRIVATE c_std_11)
+    target_link_libraries(ffx_vk_xess_recovered_blob_test PRIVATE ffx-vulkan::xess-recovered)
+    set_property(TARGET ffx_vk_xess_recovered_blob_test PROPERTY LINKER_LANGUAGE CXX)
+    add_test(NAME ffx_vk_xess_recovered_blob COMMAND ffx_vk_xess_recovered_blob_test)
+    add_test(NAME ffx_vk_xess_conversion_source
+        COMMAND "${CMAKE_COMMAND}" "-DFFX_VK_MODULE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/xess_conversion_source.cmake")
 
     # An installed package must be consumable without the source tree. Keep
     # this top-level-only: when Q2RTX vendors the project its own install tree
@@ -878,6 +909,12 @@ if(FFX_VK_PORTABLE_BUILD_TESTS)
         ffx-vulkan::unified-sr)
     add_test(NAME ffx_vk_unified_sr
         COMMAND ffx_vk_unified_sr_test)
+
+    # The catalog is also usable by a host UI without Vulkan or the renderer.
+    add_executable(ffx_vk_scaler_catalog_test tests/scaler_catalog_test.c)
+    target_include_directories(ffx_vk_scaler_catalog_test PRIVATE include)
+    target_compile_features(ffx_vk_scaler_catalog_test PRIVATE c_std_11)
+    add_test(NAME ffx_vk_scaler_catalog COMMAND ffx_vk_scaler_catalog_test)
 
     add_executable(ffx_vk_all_scalers_test
         tests/all_scalers_test.c)
