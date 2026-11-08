@@ -25,6 +25,7 @@ typedef enum FfxVkScalerOptionId {
     FFX_VK_SCALER_OPTION_SHARPNESS,
     FFX_VK_SCALER_OPTION_AUTO_EXPOSURE,
     FFX_VK_SCALER_OPTION_DYNAMIC_RESOLUTION,
+    FFX_VK_SCALER_OPTION_VARIANT,
     FFX_VK_SCALER_OPTION_COUNT
 } FfxVkScalerOptionId;
 
@@ -75,9 +76,9 @@ static inline const FfxVkScalerModel *ffxVkScalerModel(int id)
     static const FfxVkScalerModel models[] = {
         { FFX_VK_SCALER_OFF, "off", "Off / Native", "Use the engine's native rendering and anti-aliasing.", FFX_VK_SCALER_IMPLEMENTATION_NONE, 0 },
         { FFX_VK_SCALER_FSR3_1_4, "fsr314", "FSR 3.1.4", "FSR 3.1.4 temporal reconstruction.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 3 },
-        { FFX_VK_SCALER_FSR4_NEURAL, "fsr4", "FSR 4", "FSR4 v07 native Vulkan model pipeline. Device and asset availability are checked at runtime.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 15 },
+        { FFX_VK_SCALER_FSR4_NEURAL, "fsr4", "FSR 4", "FSR 4.1.2 native Vulkan model pipeline. Device and asset availability are checked at runtime.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 31 },
         { FFX_VK_SCALER_FSR3_1_5, "fsr315", "FSR 3.1.5", "FSR 3.1.5 temporal reconstruction.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 3 },
-        { FFX_VK_SCALER_INTEL_XESS, "xess", "XeSS 2.0.2 (Quality)", "Recovered XeSS 2.0.2 Quality INT8/DP4a U-Net (540p/720p/1080p) with spatial fallback at other presets.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 3 },
+        { FFX_VK_SCALER_INTEL_XESS, "xess", "Intel XeSS 2.0.2", "Recovered XeSS 2.0.2 INT8/DP4a 14-pass U-Net across Quality, Balanced, Performance, and Native AA.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 3 },
         { FFX_VK_SCALER_NVIDIA_DLSS, "dlss", "DLSS 4 / d4r (Model K)", "Native Vulkan DLSS 4 / d4r Swin Transformer Model K neural reconstruction pipeline with DFN filtering.", FFX_VK_SCALER_IMPLEMENTATION_NATIVE, 1 },
         { FFX_VK_SCALER_UNIFIED_AUTO, "auto", "Automatic", "Select a backend at runtime. See active-provider diagnostics for the result and fallback reason.", FFX_VK_SCALER_IMPLEMENTATION_AUTO, 3 }
     };
@@ -91,11 +92,19 @@ static inline const FfxVkScalerOption *ffxVkScalerOption(int id)
         { "Performance", 3 }, { "Ultra Performance", 4 }
     };
     static const FfxVkScalerChoice boolean[] = { { "Off", 0 }, { "On", 1 } };
+    static const FfxVkScalerChoice variants[] = {
+        { "Auto (Hardware Detect)", 0 },
+        { "4.1.2 i8_2 (Navi2 / RDNA2)", 1 },
+        { "4.1.2 lite_i8 (Lite 12-Pass)", 2 },
+        { "4.1.2 i8 (RDNA3 29-Pass)", 3 },
+        { "v07 i8 (Legacy)", 4 }
+    };
     static const FfxVkScalerOption options[] = {
         { FFX_VK_SCALER_OPTION_QUALITY, "quality", "quality", "Input resolution: Native AA 100%, Quality 67%, Balanced 59%, Performance 50%, Ultra Performance 33%.", FFX_VK_SCALER_OPTION_ENUM, 3, 0, 4, 1, quality, 5 },
         { FFX_VK_SCALER_OPTION_SHARPNESS, "sharpness", "sharpening", "Reconstruction sharpening amount; zero disables sharpening.", FFX_VK_SCALER_OPTION_RANGE, 0, 0, 1, 0.05f, NULL, 0 },
         { FFX_VK_SCALER_OPTION_AUTO_EXPOSURE, "auto_exposure", "auto exposure", "Use the model's automatic exposure. Changing this resets temporal history.", FFX_VK_SCALER_OPTION_BOOL, 0, 0, 1, 1, boolean, 2 },
-        { FFX_VK_SCALER_OPTION_DYNAMIC_RESOLUTION, "dynamic_resolution", "dynamic-resolution model", "Use the dynamic-resolution model instead of a fixed quality preset. Configure the engine's resolution controller separately.", FFX_VK_SCALER_OPTION_BOOL, 0, 0, 1, 1, boolean, 2 }
+        { FFX_VK_SCALER_OPTION_DYNAMIC_RESOLUTION, "dynamic_resolution", "dynamic-resolution model", "Use the dynamic-resolution model instead of a fixed quality preset. Configure the engine's resolution controller separately.", FFX_VK_SCALER_OPTION_BOOL, 0, 0, 1, 1, boolean, 2 },
+        { FFX_VK_SCALER_OPTION_VARIANT, "variant", "neural model variant", "FSR 4.1.2 pipeline variant: Auto hardware-detects Navi2/RDNA2 DP4a vs RDNA3 vs Lite.", FFX_VK_SCALER_OPTION_ENUM, 0, 0, 4, 1, variants, 5 }
     };
     return id >= 0 && id < FFX_VK_SCALER_OPTION_COUNT ? &options[id] : NULL;
 }

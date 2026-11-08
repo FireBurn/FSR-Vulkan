@@ -185,3 +185,6 @@ extern "C" uint32_t ffxVkXeSSRecoveredFrameSlotCount(const FfxVkXeSSRecoveredCon
 extern "C" VkBool32 ffxVkXeSSRecoveredGetExtent(VkExtent2D output,FfxVkXeSSReplayExtent* extent) {
     return ffxVkXeSSReplayExtentForOutput(output.width,output.height,extent)?VK_TRUE:VK_FALSE;
 }
+extern "C" VkBool32 ffxVkXeSSRecoveredGetExtentForQuality(VkExtent2D output,int quality,FfxVkXeSSReplayExtent* extent) {
+    return ffxVkXeSSReplayExtentForOutputAndQuality(output.width,output.height,quality,extent)?VK_TRUE:VK_FALSE;
+}

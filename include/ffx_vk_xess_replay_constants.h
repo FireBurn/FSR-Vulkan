@@ -36,12 +36,61 @@ static inline int ffxVkXeSSReplayExtentForOutput(uint32_t width, uint32_t height
         }
     return 0;
 }
-/* Only reference-verified quality-profile extents are enabled. */
+
+/* Derives input resolution for any display resolution and quality preset.
+ * Preset values: 0 = Native AA (1.0x), 1 = Quality (1.7x), 2 = Balanced (2.0x),
+ * 3 = Performance (2.3x), 4 = Ultra Performance (3.0x).
+ */
+static inline int ffxVkXeSSReplayExtentForOutputAndQuality(uint32_t width, uint32_t height,
+    int quality, FfxVkXeSSReplayExtent *extent)
+{
+    if (!extent || width == 0 || height == 0) return 0;
+    if ((width & 1u) || (height & 1u)) {
+        memset(extent, 0, sizeof(*extent));
+        return 0;
+    }
+    memset(extent, 0, sizeof(*extent));
+    /* Exact reference captures for Quality mode */
+    if (quality == 1) {
+        if (width == 960 && height == 540) { *extent = (FfxVkXeSSReplayExtent){565, 318, 960, 540}; return 1; }
+        if (width == 1280 && height == 720) { *extent = (FfxVkXeSSReplayExtent){753, 424, 1280, 720}; return 1; }
+        if (width == 1920 && height == 1080) { *extent = (FfxVkXeSSReplayExtent){1130, 636, 1920, 1080}; return 1; }
+    }
+    float scale = 1.7f;
+    switch (quality) {
+    case 0: /* Native AA */ scale = 1.0f; break;
+    case 1: /* Quality */ scale = 1.7f; break;
+    case 2: /* Balanced */ scale = 2.0f; break;
+    case 3: /* Performance */ scale = 2.3f; break;
+    case 4: /* Ultra Performance */ scale = 3.0f; break;
+    default: scale = 1.7f; break;
+    }
+    uint32_t inW = (uint32_t)ceilf((float)width / scale);
+    uint32_t inH = (uint32_t)ceilf((float)height / scale);
+    if (inW > width) inW = width;
+    if (inH > height) inH = height;
+    if (inW < 32) inW = 32;
+    if (inH < 32) inH = 32;
+    extent->inputWidth = inW;
+    extent->inputHeight = inH;
+    extent->outputWidth = width;
+    extent->outputHeight = height;
+    return 1;
+}
+
+/* Validates that extent dimensions are positive and input fits within output.
+ * Preserves verification compatibility with captured profiles while enabling
+ * derived multi-preset and custom resolution playback.
+ */
 static inline int ffxVkXeSSReplayExtentSupported(const FfxVkXeSSReplayExtent *extent)
 {
-    FfxVkXeSSReplayExtent expected;
-    return extent && ffxVkXeSSReplayExtentForOutput(extent->outputWidth,extent->outputHeight,&expected) &&
-        extent->inputWidth==expected.inputWidth && extent->inputHeight==expected.inputHeight;
+    if (!extent) return 0;
+    if (extent->inputWidth == 0 || extent->inputHeight == 0) return 0;
+    if (extent->outputWidth == 0 || extent->outputHeight == 0) return 0;
+    if (extent->inputWidth > extent->outputWidth || extent->inputHeight > extent->outputHeight) return 0;
+    if (extent->outputWidth < 64 || extent->outputHeight < 64) return 0;
+    if (extent->inputWidth < 32 || extent->inputHeight < 32) return 0;
+    return 1;
 }
 
 static inline uint32_t ffxVkXeSSReplayFloat(float value)

@@ -1,4 +1,4 @@
-name: portable-vulkan
+name: UniversalScalers-Vulkan CI
 
 on:
   push:
@@ -8,12 +8,19 @@ jobs:
   build-and-test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - name: Install Vulkan build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake g++ libvulkan-dev glslang-tools
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libvulkan-dev glslang-tools spirv-tools
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFFX_VK_PORTABLE_INSTALL=ON -DCMAKE_INSTALL_PREFIX=/tmp/universal-scalers-install
       - name: Build
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Install
+        run: cmake --install build
+      - name: Test Installed Package
+        run: |
+          cmake -S examples/installed-full-stack -B build-consumer -DCMAKE_PREFIX_PATH=/tmp/universal-scalers-install
+          cmake --build build-consumer
+          ./build-consumer/ffx_vk_installed_full_stack_contract

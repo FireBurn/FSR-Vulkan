@@ -807,10 +807,17 @@ if(FFX_VK_PORTABLE_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    # Export targets under both legacy ffx-vulkan and UniversalScalers_Vulkan namespaces
     install(EXPORT ffx-vulkan-targets
         FILE ffx-vulkan-targets.cmake
         NAMESPACE ffx-vulkan::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
+    install(EXPORT ffx-vulkan-targets
+        FILE UniversalScalers_Vulkan-targets.cmake
+        NAMESPACE UniversalScalers::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/UniversalScalers_Vulkan)
+
+    # Legacy ffx-vulkan package config
     configure_package_config_file(
         cmake/ffx-vulkan-config.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config.cmake
@@ -824,12 +831,26 @@ if(FFX_VK_PORTABLE_INSTALL)
         ${CMAKE_CURRENT_BINARY_DIR}/ffx-vulkan-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ffx-vulkan)
 
+    # UniversalScalers_Vulkan package config
+    configure_package_config_file(
+        cmake/UniversalScalers_Vulkan-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/UniversalScalers_Vulkan-config.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/UniversalScalers_Vulkan)
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/UniversalScalers_Vulkan-config-version.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/UniversalScalers_Vulkan-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/UniversalScalers_Vulkan-config-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/UniversalScalers_Vulkan)
+
     # Standalone release packaging (CPack)
-    set(CPACK_PACKAGE_NAME "ffx-vulkan")
+    set(CPACK_PACKAGE_NAME "UniversalScalers-Vulkan")
     set(CPACK_PACKAGE_VENDOR "FireBurn")
-    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Portable Vulkan Super Resolution and Frame Generation Framework")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Universal Multi-Vendor Vulkan Super Resolution and Frame Generation Framework (AMD FSR 4/3, Intel XeSS, NVIDIA DLSS)")
     set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-    set(CPACK_PACKAGE_INSTALL_DIRECTORY "ffx-vulkan")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "UniversalScalers-Vulkan")
     set(CPACK_GENERATOR "TGZ;ZIP")
     set(CPACK_SOURCE_GENERATOR "TGZ;ZIP")
     set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.txt")

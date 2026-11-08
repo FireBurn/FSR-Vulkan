@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Vulkan)
+include("${CMAKE_CURRENT_LIST_DIR}/UniversalScalers_Vulkan-targets.cmake")
+
+# Backward compatibility alias namespace for ffx-vulkan::
+if(NOT TARGET ffx-vulkan::effects AND TARGET UniversalScalers::effects)
+    add_library(ffx-vulkan::effects ALIAS UniversalScalers::effects)
+endif()
+if(NOT TARGET ffx-vulkan::unified-sr AND TARGET UniversalScalers::unified-sr)
+    add_library(ffx-vulkan::unified-sr ALIAS UniversalScalers::unified-sr)
+endif()
+if(NOT TARGET ffx-vulkan::all-scalers AND TARGET UniversalScalers::all-scalers)
+    add_library(ffx-vulkan::all-scalers ALIAS UniversalScalers::all-scalers)
+endif()
+if(NOT TARGET ffx-vulkan::portable AND TARGET UniversalScalers::portable)
+    add_library(ffx-vulkan::portable ALIAS UniversalScalers::portable)
+endif()
+
+if("@FFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS@" STREQUAL "ON")
+    set(UNIVERSAL_SCALERS_FSR4_V07_ASSET_DIR
+        "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_DATADIR@/UniversalScalers-Vulkan/fsr4-v07")
+    set(FFX_VK_FSR4_V07_ASSET_DIR "${UNIVERSAL_SCALERS_FSR4_V07_ASSET_DIR}")
+endif()

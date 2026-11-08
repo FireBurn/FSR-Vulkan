@@ -106,6 +106,7 @@ VkResult ffxVkXeSSRecoveredDiscardHistory(FfxVkXeSSRecoveredContext *context);
 uint32_t ffxVkXeSSRecoveredFrameSlotCount(const FfxVkXeSSRecoveredContext *context);
 /* Exact enabled profile dimensions, not a readiness/device-support query. */
 VkBool32 ffxVkXeSSRecoveredGetExtent(VkExtent2D output, FfxVkXeSSReplayExtent *extent);
+VkBool32 ffxVkXeSSRecoveredGetExtentForQuality(VkExtent2D output, int quality, FfxVkXeSSReplayExtent *extent);
 #ifdef __cplusplus
 }
 #endif
