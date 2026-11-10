@@ -425,6 +425,8 @@ uint32_t findMemoryTypeIndex(
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
 
     uint32_t bestCandidate = UINT32_MAX;
+    uint32_t visibleDeviceLocalFallback = UINT32_MAX;
+    VkMemoryPropertyFlags visibleDeviceLocalProperties = 0;
 
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
         const VkMemoryPropertyFlags memoryProperties = memProperties.memoryTypes[i].propertyFlags;
@@ -439,9 +441,16 @@ uint32_t findMemoryTypeIndex(
         if ((memRequirements.memoryTypeBits & (1u << i)) &&
             (memoryProperties & requestedProperties) == requestedProperties) {
 
-            // if just device-local memory is requested, make sure this is the invisible heap to prevent over-subscribing the local heap
-            if (requestedProperties == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT && (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+            // Prefer an invisible local heap on discrete GPUs, but UMA devices may
+            // expose only device-local types that are also host-visible. Such a
+            // type still satisfies the request and is a valid last-resort choice.
+            if (requestedProperties == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT && (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+                if (visibleDeviceLocalFallback == UINT32_MAX) {
+                    visibleDeviceLocalFallback = i;
+                    visibleDeviceLocalProperties = memoryProperties;
+                }
                 continue;
+            }
 
             bestCandidate = i;
             outProperties = memoryProperties;
@@ -452,6 +461,10 @@ uint32_t findMemoryTypeIndex(
         }
     }
 
+    if (bestCandidate == UINT32_MAX && visibleDeviceLocalFallback != UINT32_MAX) {
+        outProperties = visibleDeviceLocalProperties;
+        return visibleDeviceLocalFallback;
+    }
     return bestCandidate;
 }
 
